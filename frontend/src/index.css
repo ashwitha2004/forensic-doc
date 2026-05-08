@@ -1,0 +1,158 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Rajdhani:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 4%;
+    --foreground: 180 100% 90%;
+
+    --card: 220 25% 8%;
+    --card-foreground: 180 60% 85%;
+
+    --popover: 220 25% 8%;
+    --popover-foreground: 180 60% 85%;
+
+    --primary: 180 100% 50%;
+    --primary-foreground: 220 20% 4%;
+
+    --secondary: 260 100% 65%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 220 20% 12%;
+    --muted-foreground: 220 15% 55%;
+
+    --accent: 320 100% 60%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 85% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 180 50% 15%;
+    --input: 220 20% 15%;
+    --ring: 180 100% 50%;
+
+    --radius: 0.5rem;
+
+    --neon-glow: 180 100% 50%;
+    --neon-purple: 260 100% 65%;
+    --neon-pink: 320 100% 60%;
+    --neon-green: 150 100% 50%;
+    --surface-glass: 220 25% 10%;
+
+    --sidebar-background: 220 25% 6%;
+    --sidebar-foreground: 180 60% 85%;
+    --sidebar-primary: 180 100% 50%;
+    --sidebar-primary-foreground: 220 20% 4%;
+    --sidebar-accent: 220 20% 12%;
+    --sidebar-accent-foreground: 180 60% 85%;
+    --sidebar-border: 180 50% 15%;
+    --sidebar-ring: 180 100% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+}
+
+@layer utilities {
+  .glow-cyan {
+    box-shadow: 0 0 15px hsl(var(--neon-glow) / 0.4), 0 0 40px hsl(var(--neon-glow) / 0.15);
+  }
+
+  .glow-purple {
+    box-shadow: 0 0 15px hsl(var(--neon-purple) / 0.4), 0 0 40px hsl(var(--neon-purple) / 0.15);
+  }
+
+  .glow-pink {
+    box-shadow: 0 0 15px hsl(var(--neon-pink) / 0.4), 0 0 40px hsl(var(--neon-pink) / 0.15);
+  }
+
+  .text-glow-cyan {
+    text-shadow: 0 0 10px hsl(var(--neon-glow) / 0.6), 0 0 30px hsl(var(--neon-glow) / 0.3);
+  }
+
+  .text-glow-purple {
+    text-shadow: 0 0 10px hsl(var(--neon-purple) / 0.6), 0 0 30px hsl(var(--neon-purple) / 0.3);
+  }
+
+  .glass-surface {
+    @apply bg-card/60 backdrop-blur-xl border border-border/50;
+  }
+
+  .scan-line {
+    background: linear-gradient(
+      180deg,
+      transparent 0%,
+      hsl(var(--neon-glow) / 0.08) 50%,
+      transparent 100%
+    );
+    animation: scanline 3s linear infinite;
+  }
+
+  .grid-bg {
+    background-image:
+      linear-gradient(hsl(var(--border) / 0.3) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.3) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+
+  .cyber-border {
+    @apply border border-border relative;
+  }
+
+  .cyber-border::before {
+    content: '';
+    @apply hidden; /* Removed decorative corner */
+  }
+
+  .cyber-border::after {
+    content: '';
+    @apply hidden; /* Removed decorative corner */
+  }
+}
+
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes fingerprint-scan {
+  0% { transform: translateY(0); opacity: 0.8; }
+  50% { transform: translateY(100%); opacity: 0.3; }
+  100% { transform: translateY(0); opacity: 0.8; }
+}
+
+@keyframes face-scan {
+  0% { transform: scaleY(0); opacity: 0; }
+  10% { transform: scaleY(1); opacity: 1; }
+  90% { transform: scaleY(1); opacity: 1; }
+  100% { transform: scaleY(0); opacity: 0; }
+}
+
+@keyframes data-stream {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+@keyframes border-trace {
+  0% { stroke-dashoffset: 1000; }
+  100% { stroke-dashoffset: 0; }
+}

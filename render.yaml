@@ -1,0 +1,58 @@
+services:
+  # FastAPI Backend Service (Python)
+  - type: web
+    name: biovault-backend
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: .
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SUPABASE_URL
+        scope: env
+        value: https://wdvsfjpkxfjaelrydgqd.supabase.co
+      - key: SUPABASE_SERVICE_KEY
+        scope: env
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndkdnNmanBreGZqYWVscnlkZ3FkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTczNDExMDc3NCwiZXhwIjoxODYwNjg2Nzc0fQ.K2n1mAE2Rkzb9MjvYy-H9Zz7q1Q3X4vA5B8c9D0j1Kk
+      - key: SUPABASE_KEY
+        scope: env
+        value: sb_publishable_wdvsfjpkxfjaelrydgqd
+      - key: JWT_SECRET
+        scope: env
+        value: your-secret-key-here-change-in-production
+      - key: JWT_EXPIRE_MINUTES
+        scope: env
+        value: "1440"
+      - key: CLOUDINARY_CLOUD_NAME
+        scope: env
+        value: dvecx1ujt
+      - key: CLOUDINARY_API_KEY
+        scope: env
+        value: 794893429619753
+      - key: CLOUDINARY_API_SECRET
+        scope: env
+        value: esRn6lVD65x2z6Jy5FmKVUGfGYA
+      - key: CLOUDINARY_FOLDER
+        scope: env
+        value: pinit-thumbnails
+
+  # Frontend Web Service (React SPA with proper SPA routing)
+  - type: web
+    name: biovault-app
+    runtime: node
+    region: oregon
+    plan: free
+    rootDir: .
+    buildCommand: npm install --legacy-peer-deps --force
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        scope: runtime
+        value: "3000"
+      - key: VITE_BACKEND_URL
+        scope: build
+        value: https://biovault-backend-d13a.onrender.com
+      - key: NODE_ENV
+        scope: build
+        value: production

@@ -1,0 +1,518 @@
+/* Clean Travel History - Story-Based Design */
+
+.travel-page {
+  min-height: 100vh;
+  background: #f5f7fa;
+  padding: 40px 20px;
+}
+
+/* Loading & Empty States */
+.loading-state,
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  color: #2d3748;
+}
+
+.spinner {
+  width: 50px;
+  height: 50px;
+  border: 4px solid #e2e8f0;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Page Header */
+.page-header {
+  max-width: 900px;
+  margin: 0 auto 40px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.btn-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: white;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  color: #2d3748;
+  transition: all 0.2s;
+}
+
+.btn-back:hover {
+  border-color: #cbd5e0;
+  transform: translateX(-4px);
+}
+
+.header-content {
+  flex: 1;
+}
+
+.header-content h1 {
+  margin: 0 0 8px 0;
+  font-size: 28px;
+  font-weight: 700;
+  color: #2d3748;
+}
+
+.asset-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+}
+
+.btn-export {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.btn-export:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+/* Journey Summary - ONLY 4 KEY METRICS */
+.journey-summary {
+  max-width: 900px;
+  margin: 0 auto 40px;
+  background: white;
+  padding: 32px;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+.journey-summary h2 {
+  margin: 0 0 24px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #2d3748;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+}
+
+.summary-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.summary-icon {
+  font-size: 36px;
+  flex-shrink: 0;
+}
+
+.summary-content {
+  flex: 1;
+}
+
+.summary-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: #2d3748;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+
+.summary-label {
+  font-size: 13px;
+  color: #718096;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.summary-detail {
+  font-size: 12px;
+  color: #a0aec0;
+}
+
+/* Journey Timeline */
+.journey-timeline {
+  max-width: 900px;
+  margin: 0 auto 40px;
+  background: white;
+  padding: 32px;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+.journey-timeline h2 {
+  margin: 0 0 32px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #2d3748;
+}
+
+/* Timeline Flow */
+.timeline-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Timeline Step Card */
+.timeline-step {
+  background: #f7fafc;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.timeline-step:hover {
+  border-color: #cbd5e0;
+}
+
+.timeline-step.original {
+  background: linear-gradient(135deg, #f0fff4, #fff);
+  border-color: #9ae6b4;
+  cursor: default;
+}
+
+.timeline-step.original:hover {
+  border-color: #9ae6b4;
+}
+
+.timeline-step.expanded {
+  border-color: #667eea;
+}
+
+/* Step Header */
+.step-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.step-platform {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.platform-icon {
+  font-size: 40px;
+}
+
+.platform-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.platform-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: #2d3748;
+}
+
+.platform-date {
+  font-size: 13px;
+  color: #718096;
+}
+
+.step-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.status-badge {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.integrity-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: #667eea;
+}
+
+.expand-btn {
+  background: none;
+  border: none;
+  color: #718096;
+  cursor: pointer;
+  padding: 4px;
+  transition: transform 0.2s;
+}
+
+.expand-btn:hover {
+  transform: scale(1.1);
+}
+
+/* Step Changes - Show ONLY Delta Changes */
+.step-changes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.change-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: white;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.change-item.preserved {
+  background: #f0fff4;
+  color: #22543d;
+}
+
+.change-item.removed {
+  background: #fff5f5;
+  color: #742a2a;
+}
+
+.change-item.reduced {
+  background: #fffaf0;
+  color: #7c2d12;
+}
+
+.change-item.warning {
+  background: #fffaf0;
+  color: #7c2d12;
+}
+
+.change-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.change-text {
+  font-weight: 500;
+}
+
+.more-changes {
+  padding: 8px 16px;
+  text-align: center;
+  color: #667eea;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Step Details (Expanded) */
+.step-details {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 2px solid #e2e8f0;
+}
+
+.btn-view-full {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-view-full:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+/* Timeline Arrow Connector */
+.timeline-arrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 0;
+}
+
+.arrow-line {
+  width: 3px;
+  height: 24px;
+  background: linear-gradient(180deg, #cbd5e0, #667eea);
+  border-radius: 2px;
+}
+
+.arrow-head {
+  color: #667eea;
+  font-size: 24px;
+  line-height: 0;
+  margin-top: -4px;
+}
+
+/* Integrity Chart */
+.integrity-chart {
+  max-width: 900px;
+  margin: 0 auto;
+  background: white;
+  padding: 32px;
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+.integrity-chart h2 {
+  margin: 0 0 32px 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #2d3748;
+}
+
+.chart-container {
+  position: relative;
+  height: 200px;
+  padding: 0 40px;
+}
+
+.chart-line {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.chart-point {
+  position: absolute;
+  bottom: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.point-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 3px solid white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.point-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #2d3748;
+  background: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.point-platform {
+  font-size: 11px;
+  color: #718096;
+  font-weight: 600;
+}
+
+.chart-axis {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #a0aec0;
+  font-weight: 600;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .travel-page {
+    padding: 20px 12px;
+  }
+
+  .page-header {
+    flex-wrap: wrap;
+  }
+
+  .journey-summary,
+  .journey-timeline,
+  .integrity-chart {
+    padding: 24px;
+  }
+
+  .summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+  }
+
+  .summary-icon {
+    font-size: 28px;
+  }
+
+  .summary-value {
+    font-size: 24px;
+  }
+
+  .step-header {
+    flex-wrap: wrap;
+  }
+
+  .platform-icon {
+    font-size: 32px;
+  }
+
+  .integrity-value {
+    font-size: 24px;
+  }
+
+  .chart-container {
+    padding: 0 20px;
+  }
+}
+
+@media (max-width: 480px) {
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .step-platform {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .step-status {
+    align-items: flex-start;
+  }
+}

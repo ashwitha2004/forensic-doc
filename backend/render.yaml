@@ -1,0 +1,41 @@
+services:
+  # Type of service
+  - type: web
+  
+    # Name of your service
+    name: pinit-vault-backend
+    
+    # Environment variables
+    env:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRE_MINUTES
+        value: "60"
+      - key: RP_ID
+        value: "localhost"
+      - key: RP_NAME
+        value: "PINIT Vault"
+      - key: DEBUG
+        value: "false"
+    
+    # Build and start commands
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python -m uvicorn main:app --host 0.0.0.0 --port $PORT"
+    
+    # Health check
+    healthCheckPath: /
+    
+    # Auto-deploy
+    autoDeploy: true
+    
+    # Plan
+    plan: free
+    
+    # Runtime
+    runtime: python

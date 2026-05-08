@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: PINIT-API-DEBUG
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main_debug.py"
+    healthCheckPath: /health
+    healthCheckTimeout: 100
+    autoDeploy: true
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRE_MINUTES
+        value: 60
+        sync: false
+      - key: RP_ID
+        value: pinit-api.onrender.com
+        sync: false
+      - key: RP_NAME
+        value: PINIT
+        sync: false
+      - key: DEBUG
+        value: true
+        sync: false

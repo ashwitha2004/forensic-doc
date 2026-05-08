@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PINIT Admin Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <style>
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white">
+    <div id="app">
+        <!-- Header -->
+        <header class="bg-gray-800 border-b border-gray-700 px-6 py-4">
+            <div class="flex items-center justify-between">
+                <h1 class="text-2xl font-bold text-cyan-400">PINIT Admin Dashboard</h1>
+                <div class="flex items-center gap-4">
+                    <span id="lastUpdated" class="text-sm text-gray-400"></span>
+                    <button onclick="refreshData()" class="bg-cyan-600 hover:bg-cyan-700 px-4 py-2 rounded-lg transition-colors">
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Loading State -->
+        <div id="loading" class="flex items-center justify-center h-64">
+            <div class="animate-spin w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full"></div>
+        </div>
+
+        <!-- Main Content -->
+        <main id="content" class="hidden p-6">
+            <!-- Stats Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <div class="bg-gray-800 border border-gray-700 rounded-lg p-6">
+                    <h3 class="text-sm font-medium text-gray-400 mb-2">Total Uploads</h3>
+                    <p id="totalUploads" class="text-3xl font-bold text-cyan-400">-</p>
+                </div>
+                <div class="bg-gray-800 border border-gray-700 rounded-lg p-6">
+                    <h3 class="text-sm font-medium text-gray-400 mb-2">Total Verifications</h3>
+                    <p id="totalVerifications" class="text-3xl font-bold text-purple-400">-</p>
+                </div>
+                <div class="bg-gray-800 border border-gray-700 rounded-lg p-6">
+                    <h3 class="text-sm font-medium text-gray-400 mb-2">Total Encryptions</h3>
+                    <p id="totalEncryptions" class="text-3xl font-bold text-green-400">-</p>
+                </div>
+                <div class="bg-gray-800 border border-gray-700 rounded-lg p-6">
+                    <h3 class="text-sm font-medium text-gray-400 mb-2">Active Users Today</h3>
+                    <p id="activeUsersToday" class="text-3xl font-bold text-yellow-400">-</p>
+                </div>
+            </div>
+
+            <!-- Detection Results -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                <div class="bg-gray-800 border border-gray-700 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">Detection Results</h3>
+                    <div class="space-y-4">
+                        <div class="flex justify-between items-center">
+                            <span class="text-green-400">Authentic</span>
+                            <span id="authenticFiles" class="text-xl font-bold">-</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-yellow-400">Suspicious</span>
+                            <span id="suspiciousFiles" class="text-xl font-bold">-</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-red-400">Fake</span>
+                            <span id="fakeFiles" class="text-xl font-bold">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-800 border border-gray-700 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4">Detection Types</h3>
+                    <div id="detectionTypes" class="space-y-2">
+                        <!-- Detection types will be populated here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="bg-gray-800 border border-gray-700 rounded-lg p-6">
+                <h3 class="text-lg font-semibold mb-4">Recent Activity</h3>
+                <div id="recentActivity" class="space-y-2">
+                    <!-- Recent activity will be populated here -->
+                </div>
+            </div>
+        </main>
+
+        <!-- Error State -->
+        <div id="error" class="hidden p-6">
+            <div class="bg-red-900/20 border border-red-500/30 rounded-lg p-6 text-center">
+                <h3 class="text-xl font-semibold text-red-400 mb-2">Error Loading Data</h3>
+                <p id="errorMessage" class="text-red-300 mb-4"></p>
+                <button onclick="refreshData()" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg transition-colors">
+                    Try Again
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api/analytics';
+        
+        async function loadAnalyticsData() {
+            try {
+                showLoading();
+                const response = await axios.get(`${API_BASE}/dashboard-stats?days=30`);
+                const data = response.data;
+                
+                updateStats(data);
+                showContent();
+                updateLastUpdated();
+            } catch (error) {
+                console.error('Error loading analytics:', error);
+                showError(error.message);
+            }
+        }
+        
+        function updateStats(data) {
+            document.getElementById('totalUploads').textContent = data.total_uploads || 0;
+            document.getElementById('totalVerifications').textContent = data.total_verifications || 0;
+            document.getElementById('totalEncryptions').textContent = data.total_encryptions || 0;
+            document.getElementById('activeUsersToday').textContent = data.active_users_today || 0;
+            document.getElementById('authenticFiles').textContent = data.authentic_files || 0;
+            document.getElementById('suspiciousFiles').textContent = data.suspicious_files || 0;
+            document.getElementById('fakeFiles').textContent = data.fake_files || 0;
+            
+            // Update detection types
+            const detectionTypesEl = document.getElementById('detectionTypes');
+            detectionTypesEl.innerHTML = '';
+            Object.entries(data.detection_types || {}).forEach(([type, count]) => {
+                const item = document.createElement('div');
+                item.className = 'flex justify-between items-center';
+                item.innerHTML = `
+                    <span class="text-gray-300">${type}</span>
+                    <span class="font-medium">${count}</span>
+                `;
+                detectionTypesEl.appendChild(item);
+            });
+            
+            // Update recent activity
+            const recentActivityEl = document.getElementById('recentActivity');
+            recentActivityEl.innerHTML = '';
+            (data.recent_activity || []).forEach(activity => {
+                const item = document.createElement('div');
+                item.className = 'flex justify-between items-center p-3 bg-gray-700/50 rounded';
+                const timestamp = new Date(activity.timestamp).toLocaleString();
+                item.innerHTML = `
+                    <div>
+                        <span class="font-medium">${activity.event_type}</span>
+                        <span class="text-gray-400 ml-2">by ${activity.user_id.substring(0, 8)}...</span>
+                    </div>
+                    <span class="text-sm text-gray-400">${timestamp}</span>
+                `;
+                recentActivityEl.appendChild(item);
+            });
+        }
+        
+        function showLoading() {
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('content').classList.add('hidden');
+            document.getElementById('error').classList.add('hidden');
+        }
+        
+        function showContent() {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('content').classList.remove('hidden');
+            document.getElementById('error').classList.add('hidden');
+        }
+        
+        function showError(message) {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('content').classList.add('hidden');
+            document.getElementById('error').classList.remove('hidden');
+            document.getElementById('errorMessage').textContent = message;
+        }
+        
+        function updateLastUpdated() {
+            document.getElementById('lastUpdated').textContent = `Last updated: ${new Date().toLocaleString()}`;
+        }
+        
+        function refreshData() {
+            loadAnalyticsData();
+        }
+        
+        // Load data on page load
+        document.addEventListener('DOMContentLoaded', loadAnalyticsData);
+        
+        // Auto-refresh every 30 seconds
+        setInterval(refreshData, 30000);
+    </script>
+</body>
+</html>

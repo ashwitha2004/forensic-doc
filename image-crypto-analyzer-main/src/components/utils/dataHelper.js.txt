@@ -1,0 +1,137 @@
+// dataHelper.js
+// USE THIS IN YOUR ANALYZER COMPONENT TO SAVE DATA
+
+/**
+ * Save encrypted image data to localStorage
+ * Call this after encrypting an image
+ */
+export const saveEncryptedImage = (imageData) => {
+  try {
+    const encryptedImage = {
+      id: Date.now(),
+      fileName: imageData.fileName || 'image.jpg',
+      dateEncrypted: new Date().toLocaleDateString(),
+      uuid: imageData.uuid || generateUUID(),
+      status: 'Verified',
+      imageData: imageData.base64 || imageData.blob,
+      timestamp: new Date().toISOString()
+    };
+
+    // Get existing images
+    const existing = JSON.parse(localStorage.getItem('encryptedImages') || '[]');
+    
+    // Add new image at the beginning
+    existing.unshift(encryptedImage);
+    
+    // Save to localStorage
+    localStorage.setItem('encryptedImages', JSON.stringify(existing));
+    
+    // Add to activity history
+    addActivity({
+      action: 'Encrypted',
+      file: encryptedImage.fileName,
+      uuid: encryptedImage.uuid,
+      status: 'Success',
+      date: new Date().toLocaleString()
+    });
+
+    console.log('✅ Encrypted image saved:', encryptedImage.uuid);
+    return encryptedImage;
+  } catch (error) {
+    console.error('❌ Error saving encrypted image:', error);
+    return null;
+  }
+};
+
+/**
+ * Save analyzed image data to localStorage
+ * Call this after analyzing an image
+ */
+export const saveAnalyzedImage = (imageData) => {
+  try {
+    const analyzedImage = {
+      id: Date.now(),
+      fileName: imageData.fileName || 'image.jpg',
+      dateAnalyzed: new Date().toLocaleDateString(),
+      result: imageData.result || 'Analyzed',
+      confidence: imageData.confidence || 0,
+      timestamp: new Date().toISOString()
+    };
+
+    // Get existing analyzed images
+    const existing = JSON.parse(localStorage.getItem('analyzedImages') || '[]');
+    
+    // Add new image at the beginning
+    existing.unshift(analyzedImage);
+    
+    // Save to localStorage
+    localStorage.setItem('analyzedImages', JSON.stringify(existing));
+    
+    // Add to activity history
+    addActivity({
+      action: 'Analyzed',
+      file: analyzedImage.fileName,
+      uuid: '—',
+      status: 'Completed',
+      date: new Date().toLocaleString()
+    });
+
+    console.log('✅ Analyzed image saved:', analyzedImage.fileName);
+    return analyzedImage;
+  } catch (error) {
+    console.error('❌ Error saving analyzed image:', error);
+    return null;
+  }
+};
+
+/**
+ * Add activity to history
+ * Internal function
+ */
+const addActivity = (activity) => {
+  try {
+    const history = JSON.parse(localStorage.getItem('activityHistory') || '[]');
+    history.unshift(activity);
+    
+    // Keep only last 50 activities
+    if (history.length > 50) {
+      history.pop();
+    }
+    
+    localStorage.setItem('activityHistory', JSON.stringify(history));
+  } catch (error) {
+    console.error('Error adding activity:', error);
+  }
+};
+
+/**
+ * Generate a simple UUID
+ */
+const generateUUID = () => {
+  return 'UUID-' + Math.random().toString(36).substr(2, 9) + '-' + Date.now().toString(36);
+};
+
+/**
+ * Clear all data (for testing)
+ */
+export const clearAllData = () => {
+  localStorage.removeItem('encryptedImages');
+  localStorage.removeItem('analyzedImages');
+  localStorage.removeItem('activityHistory');
+  console.log('🗑️ All data cleared');
+};
+
+/**
+ * Get all stats (for debugging)
+ */
+export const getStats = () => {
+  const encryptedImages = JSON.parse(localStorage.getItem('encryptedImages') || '[]');
+  const analyzedImages = JSON.parse(localStorage.getItem('analyzedImages') || '[]');
+  const activityHistory = JSON.parse(localStorage.getItem('activityHistory') || '[]');
+  
+  return {
+    totalEncrypted: encryptedImages.length,
+    totalAnalyzed: analyzedImages.length,
+    totalActivities: activityHistory.length
+  };
+};

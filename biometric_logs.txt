@@ -1,0 +1,2 @@
+- waiting for device -
+error: protocol fault (couldn't read status): connection reset

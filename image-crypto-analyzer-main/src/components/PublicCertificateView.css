@@ -1,0 +1,28 @@
+/* Reuse existing PublicVerifyPage.css styles */
+@import './PublicVerifyPage.css';
+
+/* Additional styles for certificate view */
+.cert-header-public {
+  text-align: center;
+  padding: 40px 20px;
+  margin-bottom: 30px;
+}
+
+.cert-header-public h1 {
+  font-size: 32px;
+  color: #f0f6fc;
+  margin: 20px 0;
+  font-weight: 700;
+}
+
+.cert-verified-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(63, 185, 80, 0.15);
+  color: #3fb950;
+  padding: 10px 24px;
+  border-radius: 24px;
+  font-weight: 600;
+  font-size: 14px;
+}
