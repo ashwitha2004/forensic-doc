@@ -1,0 +1,16 @@
+services:
+  # Frontend Service
+  - type: web
+    name: pinit-frontend
+    env: static
+    buildCommand: npm run build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://pinit-backend.onrender.com/api/*
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: VITE_API_URL
+        value: https://pinit-backend.onrender.com

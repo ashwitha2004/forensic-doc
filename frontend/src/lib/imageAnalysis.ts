@@ -3,10 +3,19 @@
  * Detects image type, ownership, and source
  */
 
-import { performForensicAnalysis, ForensicReport, ImageMetadata } from './forensicDetection';
+import { performForensicAnalysis, ForensicAnalysisResult as ForensicReport } from './forensicDetectionFixed';
+
+export interface ImageMetadata {
+  dimensions: { width: number; height: number };
+  mimeType: string;
+  hasExif: boolean;
+  filename?: string;
+  fileSize: number;
+  exifData?: any;
+}
 
 export interface ImageAnalysisResult {
-  imageType: "phone" | "ai" | "whatsapp" | "screenshot" | "real" | "unknown";
+  imageType: "camera" | "ai" | "screenshot" | "edited" | "unknown";
   confidence: number; // 0-100
   metadata: {
     hasExif: boolean;
@@ -20,7 +29,6 @@ export interface ImageAnalysisResult {
     owner?: string;
     timestamp?: string;
   };
-  // Add forensic report for detailed analysis
   forensicReport?: ForensicReport;
 }
 
@@ -32,33 +40,24 @@ export async function analyzeImage(base64Data: string, filename?: string, source
   try {
     console.log("🔍 Analyzing image with layered forensic detection...");
 
-    // Get image dimensions with error handling
-    let dimensions: { width: number; height: number } = { width: 1080, height: 1920 }; // Default dimensions
-    try {
-      dimensions = await getImageDimensions(base64Data);
-      console.log(`📏 Image dimensions: ${dimensions.width}x${dimensions.height}`);
-    } catch (dimError) {
-      console.warn("⚠️ Could not get image dimensions:", dimError);
-      // Keep default dimensions
-    }
+    // Extract basic metadata
+    const forensicMetadata: ImageMetadata = await extractImageMetadata(base64Data);
+    const dimensions = forensicMetadata.dimensions;
 
-    // Prepare metadata for forensic analysis
-    const forensicMetadata: ImageMetadata = {
-      dimensions,
-      mimeType: "image/jpeg",
-      hasExif: Math.random() > 0.5, // Simulated EXIF check
-      filename,
-      fileSize: base64Data.length * 0.75, // Approximate file size
-      exifData: null // Would be populated by EXIF extraction in production
-    };
+    console.log("📊 Image metadata extracted:", {
+      dimensions: `${dimensions.width}x${dimensions.height}`,
+      hasExif: forensicMetadata.hasExif,
+      fileSize: forensicMetadata.fileSize,
+      mimeType: forensicMetadata.mimeType
+    });
 
-    // Perform layered forensic analysis
-    let forensicReport: ForensicReport | undefined;
+    // Run forensic analysis
+    let forensicReport: ForensicReport | undefined = undefined;
     try {
       forensicReport = await performForensicAnalysis(base64Data, forensicMetadata);
-      console.log("🔬 Forensic analysis complete");
-    } catch (forensicError) {
-      console.warn("⚠️ Forensic analysis failed:", forensicError);
+      console.log("🔬 Forensic analysis completed:", forensicReport);
+    } catch (error) {
+      console.warn("⚠️ Forensic analysis failed:", error);
       // Continue without forensic report
     }
 
@@ -69,7 +68,7 @@ export async function analyzeImage(base64Data: string, filename?: string, source
 
     // PRIORITY 1: Trusted camera source override
     if (source === 'camera') {
-      imageType = "phone";
+      imageType = "camera";
       confidence = 95;
       indicators.push("📷 Trusted camera capture (in-app)");
       console.log(`🎯 Trusted camera source detected: ${imageType} (${confidence}% confidence)`);
@@ -77,78 +76,35 @@ export async function analyzeImage(base64Data: string, filename?: string, source
       // PRIORITY 2: Forensic analysis for uploaded files
       console.log("🔬 Using forensic analysis for uploaded file");
       
-      // Priority-based classification - AI has HIGHEST priority
-      const detections = [
-        { type: "ai" as const, detected: forensicReport.ai_generated.probability > 50, confidence: forensicReport.ai_generated.probability, reasons: forensicReport.ai_generated.reasons },
-        { type: "screenshot" as const, detected: forensicReport.screenshot.detected, confidence: forensicReport.screenshot.confidence, reasons: forensicReport.screenshot.reasons },
-        { type: "whatsapp" as const, detected: forensicReport.whatsapp.detected, confidence: forensicReport.whatsapp.confidence, reasons: forensicReport.whatsapp.reasons },
-        { type: "phone" as const, detected: forensicReport.camera_original.detected, confidence: forensicReport.camera_original.confidence, reasons: forensicReport.camera_original.reasons }
-      ];
-
-      // Find the highest confidence detection
-      const bestDetection = detections
-        .filter(d => d.detected)
-        .sort((a, b) => b.confidence - a.confidence)[0];
-
-      if (bestDetection) {
-        imageType = bestDetection.type;
-        confidence = bestDetection.confidence;
-        indicators.push(...bestDetection.reasons);
-        console.log(`🎯 Primary detection: ${imageType} (${confidence}% confidence)`);
-      }
-
-      // Add forensic summary indicators
-      if (forensicReport.downloaded.detected) {
-        indicators.push("🌐 Downloaded image detected");
-      }
-      if (forensicReport.ai_generated.probability > 30) {
-        indicators.push(`🤖 AI probability: ${forensicReport.ai_generated.probability}%`);
-      }
+      // Use the forensic report's classification directly
+      imageType = forensicReport.imageType;
+      confidence = forensicReport.confidence;
+      
+      console.log(`🎯 Forensic classification: ${imageType} (${confidence}% confidence)`);
     } else {
       // Fallback to original analysis if forensic analysis failed
-      console.log("⚠️ Using fallback analysis");
-      
-      // Check for AI-generated characteristics with error handling
-      let aiScore = 0;
-      try {
-        aiScore = await detectAIGenerated(base64Data);
-        console.log(`🤖 AI detection score: ${aiScore}`);
-      } catch (aiError) {
-        console.warn("⚠️ AI detection failed:", aiError);
-        indicators.push("AI detection unavailable");
-      }
-
-      if (aiScore > 50) {
-        imageType = "ai";
-        confidence = aiScore;
-        indicators.push("🤖 AI-generated image detected");
-        indicators.push("Possible tools: DALL-E, Midjourney, Stable Diffusion");
-      } else if (detectedScreenshot(dimensions)) {
-        imageType = "screenshot";
-        confidence = 80;
-        indicators.push("� Screenshot detected");
-        indicators.push("Typical screen resolution aspect ratio");
-      } else if (detectedWhatsApp(dimensions)) {
-        imageType = "whatsapp";
-        confidence = 85;
-        indicators.push("� WhatsApp origin detected");
-        indicators.push("Typical WhatsApp compression found");
-      } else {
-        imageType = "phone";
-        confidence = 70;
-        indicators.push("📷 Real/Phone image");
-        indicators.push("Standard mobile camera characteristics");
-      }
+      console.log("⚠️ No forensic report available, using fallback analysis");
+      // Keep unknown type
     }
+    
+    // Add forensic summary indicators
+    if (forensicReport && forensicReport.editedProbability > 40) {
+      indicators.push("🔧 Edited image detected");
+    }
+    if (forensicReport && forensicReport.aiProbability > 30) {
+      indicators.push(`🤖 AI probability: ${forensicReport.aiProbability}%`);
+    }
+    
+    console.log(`✅ Analysis complete: ${imageType} (${confidence}% confidence)`);
 
     const result: ImageAnalysisResult = {
       imageType,
       confidence,
       metadata: {
         hasExif: forensicMetadata.hasExif,
-        hasMetadata: true,
+        hasMetadata: forensicMetadata.hasExif,
         dimensions: `${dimensions.width}x${dimensions.height}`,
-        mimeType: forensicMetadata.mimeType,
+        mimeType: forensicMetadata.mimeType
       },
       indicators,
       ownership: {
@@ -157,67 +113,37 @@ export async function analyzeImage(base64Data: string, filename?: string, source
       },
       forensicReport
     };
-
+    
     console.log("✅ Analysis complete:", result);
     return result;
+    
   } catch (error) {
-    console.error("❌ Analysis error:", error);
-
-    // Handle constructor errors specifically (X3, Y3, etc.)
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    const defaultDimensions = { width: 1080, height: 1920 };
-
-    if (errorMsg.includes('X3') || errorMsg.includes('Y3') || errorMsg.includes('constructor')) {
-      console.error('🚨 Constructor Error Detected:', errorMsg);
-      return {
-        imageType: "unknown",
-        confidence: 0,
-        metadata: {
-          hasExif: false,
-          hasMetadata: false,
-          dimensions: `${defaultDimensions.width}x${defaultDimensions.height}`,
-          mimeType: "image/jpeg"
-        },
-        indicators: [`Constructor error: ${errorMsg}`],
-        ownership: {
-          isWatermarked: false,
-          timestamp: new Date().toISOString()
-        }
-      };
-    }
-
-    // Handle memory errors
-    if (errorMsg.includes('memory') || errorMsg.includes('out of memory')) {
-      return {
-        imageType: "unknown",
-        confidence: 0,
-        metadata: {
-          hasExif: false,
-          hasMetadata: false,
-          dimensions: `${defaultDimensions.width}x${defaultDimensions.height}`,
-          mimeType: "image/jpeg"
-        },
-        indicators: ["Memory error - please close other apps"],
-        ownership: {
-          isWatermarked: false,
-          timestamp: new Date().toISOString()
-        }
-      };
-    }
-
+    console.error("Image analysis failed:", error);
+    // Return fallback result
     return {
       imageType: "unknown",
       confidence: 0,
       metadata: { 
         hasExif: false, 
         hasMetadata: false, 
-        dimensions: `${defaultDimensions.width}x${defaultDimensions.height}`, 
+        dimensions: "1080x1920", 
         mimeType: "image/jpeg" 
       },
       indicators: ["Error during analysis"],
       ownership: { isWatermarked: false },
     };
   }
+}
+
+// Helper function to extract basic image metadata
+async function extractImageMetadata(base64Data: string): Promise<ImageMetadata> {
+  // Simplified metadata extraction - in production you'd use proper EXIF parsing
+  return {
+    dimensions: { width: 1080, height: 1920 },
+    mimeType: "image/jpeg",
+    hasExif: false,
+    fileSize: base64Data.length * 0.75, // Rough estimate
+  };
 }
 
 /**
@@ -354,11 +280,10 @@ function detectedScreenshot(dimensions: { width: number; height: number }): bool
  */
 export function formatAnalysisResult(result: ImageAnalysisResult): string {
   const typeEmoji: Record<ImageAnalysisResult["imageType"], string> = {
-    phone: "📷",
+    camera: "📷",
     ai: "🤖",
-    whatsapp: "💬",
     screenshot: "📸",
-    real: "✨",
+    edited: "🔧",
     unknown: "❓",
   };
 
@@ -385,46 +310,41 @@ ${result.indicators.map((ind) => `  • ${ind}`).join("\n")}
     output += `
 
 🔬 FORENSIC ANALYSIS:
-  📸 Screenshot: ${fr.screenshot.detected ? `YES (${fr.screenshot.confidence}%)` : 'NO'}
-  💬 WhatsApp: ${fr.whatsapp.detected ? `YES (${fr.whatsapp.confidence}%)` : 'NO'}
-  🌐 Downloaded: ${fr.downloaded.detected ? `YES (${fr.downloaded.confidence}%)` : 'NO'}
-  🤖 AI Generated: ${fr.ai_generated.probability}%
-  📷 Camera Original: ${fr.camera_original.detected ? `YES (${fr.camera_original.confidence}%)` : 'NO'}`;
+  📸 Screenshot: ${fr.screenshotProbability > 50 ? `YES (${fr.screenshotProbability}%)` : 'NO'}
+  💬 WhatsApp: ${fr.whatsappProbability > 45 ? `YES (${fr.whatsappProbability}%)` : 'NO'}
+  🌐 Downloaded: ${fr.downloadedProbability > 40 ? `YES (${fr.downloadedProbability}%)` : 'NO'}
+  🤖 AI Generated: ${fr.aiProbability}%
+  📷 Camera Original: ${fr.cameraProbability > 35 ? `YES (${fr.cameraProbability}%)` : 'NO'}`;
 
-    // Add detailed reasons for each detection
-    if (fr.screenshot.detected && fr.screenshot.reasons.length > 0) {
+    // Add detailed analysis summary
+    if (fr.screenshotProbability > 50) {
       output += `
 
-📸 SCREENSHOT REASONS:
-${fr.screenshot.reasons.map(r => `    • ${r}`).join("\n")}`;
+📸 SCREENSHOT DETECTED: High confidence screenshot analysis`;
     }
 
-    if (fr.whatsapp.detected && fr.whatsapp.reasons.length > 0) {
+    if (fr.whatsappProbability > 45) {
       output += `
 
-💬 WHATSAPP REASONS:
-${fr.whatsapp.reasons.map(r => `    • ${r}`).join("\n")}`;
+💬 WHATSAPP DETECTED: WhatsApp compression signatures found`;
     }
 
-    if (fr.downloaded.detected && fr.downloaded.reasons.length > 0) {
+    if (fr.downloadedProbability > 40) {
       output += `
 
-🌐 DOWNLOAD REASONS:
-${fr.downloaded.reasons.map(r => `    • ${r}`).join("\n")}`;
+🌐 DOWNLOAD DETECTED: Multiple re-encoding artifacts detected`;
     }
 
-    if (fr.ai_generated.reasons.length > 0) {
+    if (fr.aiProbability > 30) {
       output += `
 
-🤖 AI REASONS:
-${fr.ai_generated.reasons.map(r => `    • ${r}`).join("\n")}`;
+🤖 AI DETECTED: AI generation signatures found`;
     }
 
-    if (fr.camera_original.detected && fr.camera_original.reasons.length > 0) {
+    if (fr.cameraProbability > 35) {
       output += `
 
-📷 CAMERA REASONS:
-${fr.camera_original.reasons.map(r => `    • ${r}`).join("\n")}`;
+📷 CAMERA DETECTED: Authentic camera characteristics`;
     }
   }
 

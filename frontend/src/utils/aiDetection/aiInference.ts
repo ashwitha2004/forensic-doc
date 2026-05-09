@@ -250,11 +250,35 @@ export class AIInference {
       ], [3, 3]);
       
       // Convolve with Sobel kernels
+      // Create proper 4D tensor shape [batch, height, width, channels]
       const gray4d = gray.expandDims(-1).expandDims(0);
+      console.log('[AI-INFERENCE] Gray tensor shape before conv2d:', gray4d.shape);
+      
       const kernelX = sobelX.reshape([3, 3, 1, 1]) as tf.Tensor4D;
       const kernelY = sobelY.reshape([3, 3, 1, 1]) as tf.Tensor4D;
-      const edgesX = tf.conv2d(gray4d as tf.Tensor4D, kernelX, 1, 'same');
-      const edgesY = tf.conv2d(gray4d as tf.Tensor4D, kernelY, 1, 'same');
+      
+      let edgesX: tf.Tensor4D;
+      let edgesY: tf.Tensor4D;
+      
+      // Handle the 5D tensor case by squeezing the extra dimension
+      if (gray4d.shape.length === 5) {
+        console.log('[AI-INFERENCE] Fixing 5D tensor to 4D...');
+        // Remove the extra dimension: [1, height, width, 1, 1] -> [1, height, width, 1]
+        const correctedTensor = gray4d.squeeze([-1]) as tf.Tensor4D;
+        console.log('[AI-INFERENCE] Corrected tensor shape:', correctedTensor.shape);
+        edgesX = tf.conv2d(correctedTensor, kernelX, 1, 'same');
+        edgesY = tf.conv2d(correctedTensor, kernelY, 1, 'same');
+        correctedTensor.dispose();
+      } else if (gray4d.shape.length === 4) {
+        edgesX = tf.conv2d(gray4d as tf.Tensor4D, kernelX, 1, 'same');
+        edgesY = tf.conv2d(gray4d as tf.Tensor4D, kernelY, 1, 'same');
+      } else {
+        console.error('[AI-INFERENCE] Unexpected tensor shape:', gray4d.shape);
+        throw new Error(`Unexpected tensor shape: ${gray4d.shape}`);
+      }
+      
+      // Clean up intermediate tensors
+      gray4d.dispose();
       
       // Combine gradients
       const gradients = tf.sqrt(tf.square(edgesX).add(tf.square(edgesY))).squeeze();

@@ -84,6 +84,10 @@ export async function detectScreenshot(
   metadata: ImageMetadata
 ): Promise<ScreenshotDetection> {
   console.log("[SCREENSHOT] Starting screenshot detection analysis...");
+  console.log("[SCREENSHOT] Input metadata:", {
+    dimensions: `${metadata.dimensions.width}x${metadata.dimensions.height}`,
+    hasExif: metadata.hasExif
+  });
   
   const reasons: string[] = [];
   let confidence = 0;
@@ -92,7 +96,8 @@ export async function detectScreenshot(
   const { width, height } = metadata.dimensions;
   const aspectRatio = width / height;
   
-  // Exact screen resolution matching
+  // Exact screen resolution matching (40 points)
+  let resolutionScore = 0;
   const commonScreenResolutions = [
     "1080x2400", "1080x2340", "1080x2280", // Modern phones
     "1170x2532", "1179x2556",              // iPhone 12/13/14/15
@@ -104,12 +109,16 @@ export async function detectScreenshot(
   
   const resolutionString = `${width}x${height}`;
   if (commonScreenResolutions.includes(resolutionString)) {
+    resolutionScore = 40;
     confidence += 40;
     reasons.push(`Exact screen resolution match: ${resolutionString}`);
-    console.log(`[SCREENSHOT] ✅ Exact screen resolution: ${resolutionString}`);
+    console.log(`[SCREENSHOT] ✅ Exact screen resolution: ${resolutionString} (+40 points)`);
+  } else {
+    console.log(`[SCREENSHOT] ❌ No screen resolution match: ${resolutionString} (+0 points)`);
   }
   
-  // Aspect ratio analysis
+  // Aspect ratio analysis (25 points)
+  let aspectRatioScore = 0;
   const screenAspectRatios = [
     { ratio: 9/19.5, tolerance: 0.05, name: "Modern phone" },   // ~0.46
     { ratio: 9/20, tolerance: 0.05, name: "Tall phone" },       // 0.45
@@ -120,27 +129,41 @@ export async function detectScreenshot(
   
   for (const screenRatio of screenAspectRatios) {
     if (Math.abs(aspectRatio - screenRatio.ratio) <= screenRatio.tolerance) {
+      aspectRatioScore = 25;
       confidence += 25;
       reasons.push(`Screen aspect ratio detected: ${screenRatio.name} (${aspectRatio.toFixed(2)})`);
-      console.log(`[SCREENSHOT] ✅ Screen aspect ratio: ${screenRatio.name}`);
+      console.log(`[SCREENSHOT] ✅ Screen aspect ratio: ${screenRatio.name} (+25 points)`);
       break;
     }
   }
   
-  // No EXIF camera metadata (screenshots typically don't have camera EXIF)
-  if (!metadata.hasExif) {
-    confidence += 15;
-    reasons.push("No camera EXIF metadata (typical of screenshots)");
-    console.log("[SCREENSHOT] ✅ No camera EXIF metadata");
+  if (aspectRatioScore === 0) {
+    console.log(`[SCREENSHOT] ❌ No screen aspect ratio match: ${aspectRatio.toFixed(2)} (+0 points)`);
   }
   
-  // Check for UI edge density (simplified pixel analysis)
+  // No EXIF camera metadata (15 points)
+  let exifScore = 0;
+  if (!metadata.hasExif) {
+    exifScore = 15;
+    confidence += 15;
+    reasons.push("No camera EXIF metadata (typical of screenshots)");
+    console.log("[SCREENSHOT] ✅ No camera EXIF metadata (+15 points)");
+  } else {
+    console.log("[SCREENSHOT] ❌ Camera EXIF metadata present (+0 points)");
+  }
+  
+  // Check for UI edge density (20 points)
+  let uiDensityScore = 0;
   try {
     const uiDensity = await analyzeUIDensity(base64Data);
+    console.log(`[SCREENSHOT] UI edge density: ${uiDensity.toFixed(3)} (threshold: 0.7)`);
     if (uiDensity > 0.7) {
+      uiDensityScore = 20;
       confidence += 20;
       reasons.push("High UI edge density detected");
-      console.log("[SCREENSHOT] ✅ High UI edge density");
+      console.log(`[SCREENSHOT] ✅ High UI edge density: ${uiDensity.toFixed(3)} > 0.7 (+20 points)`);
+    } else {
+      console.log(`[SCREENSHOT] ❌ Low UI edge density: ${uiDensity.toFixed(3)} <= 0.7 (+0 points)`);
     }
   } catch (error) {
     console.warn("[SCREENSHOT] ⚠️ UI density analysis failed:", error);
@@ -148,6 +171,13 @@ export async function detectScreenshot(
   
   detected = confidence > 70;
   
+  console.log(`[DEBUG] Screenshot Scores:`);
+  console.log(`[DEBUG] Resolution Score: ${resolutionScore}/40`);
+  console.log(`[DEBUG] Aspect Ratio Score: ${aspectRatioScore}/25`);
+  console.log(`[DEBUG] EXIF Score: ${exifScore}/15`);
+  console.log(`[DEBUG] UI Density Score: ${uiDensityScore}/20`);
+  console.log(`[DEBUG] Final Screenshot Score: ${confidence}/100`);
+  console.log(`[DEBUG] Screenshot Score vs Threshold: ${confidence} > 70 = ${detected ? 'PASS' : 'FAIL'}`);
   console.log(`[SCREENSHOT] ${detected ? 'DETECTED' : 'NOT DETECTED'} - Confidence: ${confidence}%`);
   
   return {
@@ -261,20 +291,32 @@ export async function detectDownloaded(
   
   // STRONG DOWNLOAD INDICATORS ONLY (not generic missing EXIF)
   
-  // 1. Clear download naming patterns (40 points)
+  // 1. Clear download naming patterns (40 points) - but exclude camera-like patterns
   if (metadata.filename) {
     const strongDownloadPatterns = [
       /download/i,
       /untitled/i,
       /\d{13,}/,  // Unix timestamp
-      /^[a-f0-9]{8,}$/i  // Hash-like filenames
+      /^[a-f0-9]{12,}$/i  // Hash-like filenames (longer hashes)
     ];
     
+    // Exclude patterns that might be legitimate camera exports
+    const excludePatterns = [
+      /IMG_\d+/i,           // Standard camera naming
+      /encrypted_image/i,   // System-generated encrypted images
+      /PINIT/i,             // System-related
+      /biovault/i           // System-related
+    ];
+    
+    const isExcluded = excludePatterns.some(pattern => pattern.test(metadata.filename));
     const matchesStrongPattern = strongDownloadPatterns.some(pattern => pattern.test(metadata.filename));
-    if (matchesStrongPattern) {
+    
+    if (matchesStrongPattern && !isExcluded) {
       confidence += 40;
       reasons.push("Strong download naming pattern detected");
       console.log("[DOWNLOAD] ✅ Strong download naming pattern");
+    } else if (matchesStrongPattern && isExcluded) {
+      console.log("[DOWNLOAD] ❌ Download pattern ignored due to system/camera filename");
     }
   }
   
@@ -346,72 +388,78 @@ export async function detectAIGenerated(
 ): Promise<AIGeneratedDetection> {
   console.log("[AI] Starting AI-generated detection analysis...");
   
-  const reasons: string[] = [];
-  let probability = 0;
+  const aiReasons: string[] = [];
+  let aiScore = 0;
   
   try {
-    // Texture consistency analysis
-    const textureScore = await analyzeTextureConsistency(base64Data);
-    if (textureScore > 0.7) {
-      probability += 25;
-      reasons.push("High texture consistency (AI characteristic)");
-      console.log("[AI] ✅ High texture consistency");
+    // Get analysis values
+    const [repeatedPatterns, edgeSmoothness, frequencySpectrum, symmetry, noiseDistribution] = await Promise.all([
+      analyzeRepeatedPatterns(base64Data).catch(() => 0),
+      analyzeEdgeSmoothness(base64Data).catch(() => 0),
+      analyzeFrequencySpectrum(base64Data).catch(() => 0),
+      analyzeSymmetry(base64Data).catch(() => 0),
+      analyzeNoiseDistribution(base64Data).catch(() => 0)
+    ]);
+    
+    // REPEATED PATTERNS
+    if (repeatedPatterns > 0.82) {
+      aiScore += 25;
+      aiReasons.push("Repeated GAN-like patterns");
+      console.log(`[AI] ✅ Repeated patterns: ${repeatedPatterns.toFixed(3)} > 0.82 (+25 points)`);
+    } else {
+      console.log(`[AI] ❌ Low repeated patterns: ${repeatedPatterns.toFixed(3)} <= 0.82 (+0 points)`);
     }
     
-    // Repeated patterns detection
-    const patternScore = await analyzeRepeatedPatterns(base64Data);
-    if (patternScore > 0.6) {
-      probability += 20;
-      reasons.push("Repeated patterns detected");
-      console.log("[AI] ✅ Repeated patterns");
+    // UNNATURAL EDGE SMOOTHNESS
+    if (edgeSmoothness > 0.92) {
+      aiScore += 20;
+      aiReasons.push("Artificial edge smoothness");
+      console.log(`[AI] ✅ Unnatural edge smoothness: ${edgeSmoothness.toFixed(3)} > 0.92 (+20 points)`);
+    } else {
+      console.log(`[AI] ❌ Natural edge smoothness: ${edgeSmoothness.toFixed(3)} <= 0.92 (+0 points)`);
     }
     
-    // Edge smoothness analysis
-    const edgeScore = await analyzeEdgeSmoothness(base64Data);
-    if (edgeScore > 0.8) {
-      probability += 15;
-      reasons.push("Unnatural edge smoothness");
-      console.log("[AI] ✅ Unnatural edge smoothness");
+    // GAN FREQUENCY PATTERNS
+    if (frequencySpectrum > 0.88) {
+      aiScore += 25;
+      aiReasons.push("GAN frequency artifacts");
+      console.log(`[AI] ✅ GAN frequency patterns: ${frequencySpectrum.toFixed(3)} > 0.88 (+25 points)`);
+    } else {
+      console.log(`[AI] ❌ Natural frequency spectrum: ${frequencySpectrum.toFixed(3)} <= 0.88 (+0 points)`);
     }
     
-    // Frequency spectrum analysis
-    const frequencyScore = await analyzeFrequencySpectrum(base64Data);
-    if (frequencyScore > 0.75) {
-      probability += 20;
-      reasons.push("GAN-like frequency patterns");
-      console.log("[AI] ✅ GAN-like frequency patterns");
+    // PERFECT SYMMETRY
+    if (symmetry > 0.90) {
+      aiScore += 15;
+      aiReasons.push("Artificial symmetry");
+      console.log(`[AI] ✅ Perfect symmetry: ${symmetry.toFixed(3)} > 0.90 (+15 points)`);
+    } else {
+      console.log(`[AI] ❌ Natural symmetry: ${symmetry.toFixed(3)} <= 0.90 (+0 points)`);
     }
     
-    // Over-symmetric features (especially for faces/people)
-    const symmetryScore = await analyzeSymmetry(base64Data);
-    if (symmetryScore > 0.85) {
-      probability += 10;
-      reasons.push("Over-symmetric features detected");
-      console.log("[AI] ✅ Over-symmetric features");
-    }
-    
-    // Inconsistent noise distribution
-    const noiseScore = await analyzeNoiseDistribution(base64Data);
-    if (noiseScore > 0.7) {
-      probability += 10;
-      reasons.push("Inconsistent noise distribution");
-      console.log("[AI] ✅ Inconsistent noise distribution");
+    // FAKE NOISE PROFILE
+    if (noiseDistribution < 0.15) {
+      aiScore += 15;
+      aiReasons.push("Synthetic noise profile");
+      console.log(`[AI] ✅ Fake noise profile: ${noiseDistribution.toFixed(3)} < 0.15 (+15 points)`);
+    } else {
+      console.log(`[AI] ❌ Natural noise distribution: ${noiseDistribution.toFixed(3)} >= 0.15 (+0 points)`);
     }
     
   } catch (error) {
     console.warn("[AI] ⚠️ AI detection analysis failed:", error);
-    probability = 0;
-    reasons.push("AI detection analysis failed");
+    aiReasons.push("AI detection analysis failed");
   }
   
-  // Cap probability at 100
-  probability = Math.min(100, probability);
+  // Cap at 100
+  aiScore = Math.min(aiScore, 100);
   
-  console.log(`[AI] Probability: ${probability}%`);
+  console.log(`[AI] Final AI Score: ${aiScore}/100`);
+  console.log(`[AI] Probability: ${aiScore}%`);
   
   return {
-    probability,
-    reasons
+    probability: aiScore,
+    reasons: aiReasons
   };
 }
 
@@ -424,152 +472,91 @@ export async function detectCameraOriginal(
   metadata: ImageMetadata
 ): Promise<CameraOriginalDetection> {
   console.log("[CAMERA] Starting professional camera detection analysis...");
+  console.log("[CAMERA] Input metadata:", {
+    hasExif: metadata.hasExif,
+    dimensions: `${metadata.dimensions.width}x${metadata.dimensions.height}`,
+    filename: metadata.filename,
+    fileSize: metadata.fileSize
+  });
   
   const reasons: string[] = [];
-  let confidence = 0;
+  let cameraScore = 0;
   let detected = false;
   
-  // 1. EXIF CAMERA METADATA ANALYSIS (50 points max)
-  if (metadata.hasExif && metadata.exifData) {
-    console.log("[CAMERA] EXIF data found, analyzing camera metadata...");
-    
-    // Check for camera manufacturer (major brands)
-    const cameraMakes = [
-      'Apple', 'Samsung', 'Xiaomi', 'OnePlus', 'Huawei', 'Oppo', 'Vivo',
-      'Canon', 'Nikon', 'Sony', 'Fujifilm', 'Olympus', 'Panasonic', 'Leica',
-      'LG', 'Motorola', 'Google', 'Honor', 'Realme', 'Asus', 'HTC'
-    ];
-    
-    if (metadata.exifData.Make) {
-      const make = metadata.exifData.Make;
-      if (cameraMakes.some(brand => make.toLowerCase().includes(brand.toLowerCase()))) {
-        confidence += 35;
-        reasons.push(`Camera manufacturer: ${make}`);
-        console.log(`[CAMERA] ✅ EXIF found - Camera make: ${make}`);
-      } else {
-        confidence += 20;
-        reasons.push(`Unknown camera manufacturer: ${make}`);
-        console.log(`[CAMERA] ⚠️ EXIF found - Unknown make: ${make}`);
-      }
-    }
-    
-    // Camera model
-    if (metadata.exifData.Model) {
-      confidence += 10;
-      reasons.push(`Camera model: ${metadata.exifData.Model}`);
-      console.log(`[CAMERA] ✅ EXIF found - Camera model: ${metadata.exifData.Model}`);
-    }
-    
-    // Lens information (strong camera indicator)
-    if (metadata.exifData.LensModel || metadata.exifData.LensMake) {
-      confidence += 5;
-      reasons.push("Lens metadata present");
-      console.log("[CAMERA] ✅ EXIF found - Lens metadata");
-    }
-    
-    // Camera-specific EXIF fields
-    const cameraFields = [
-      'DateTimeOriginal', 'ExposureTime', 'ISO', 'FocalLength', 
-      'FNumber', 'Flash', 'WhiteBalance', 'ExposureProgram'
-    ];
-    
-    const cameraFieldCount = cameraFields.filter(field => metadata.exifData[field]).length;
-    if (cameraFieldCount >= 3) {
-      confidence += 10;
-      reasons.push(`Camera settings present (${cameraFieldCount} fields)`);
-      console.log(`[CAMERA] ✅ EXIF found - Camera settings: ${cameraFieldCount} fields`);
-    }
-  } else {
-    console.log("[CAMERA] ❌ No EXIF data found");
-  }
-  
-  // 2. SENSOR NOISE ANALYSIS (20 points)
   try {
-    console.log("[CAMERA] Analyzing sensor noise patterns...");
-    const noiseAnalysis = await analyzeSensorNoise(base64Data);
-    if (noiseAnalysis.isNatural) {
-      confidence += 20;
-      reasons.push("Natural sensor noise patterns");
-      console.log("[CAMERA] ✅ Natural sensor noise detected");
+    // Get analysis values
+    const [sensorNoise, jpegArtifacts, edgeSmoothness, colorVariance] = await Promise.all([
+      analyzeSensorNoise(base64Data).then(result => result.isNatural ? 1 : 0).catch(() => 0),
+      analyzeNaturalJPEG(base64Data).then(result => result.isNatural ? 1 : 0).catch(() => 0),
+      analyzeEdgeSmoothness(base64Data).catch(() => 0),
+      analyzeColorVariance(base64Data).catch(() => 0)
+    ]);
+    
+    const hasCameraExif = metadata.hasExif && metadata.exifData;
+    
+    // EXIF BONUS ONLY
+    if (hasCameraExif) {
+      cameraScore += 25;
+      reasons.push("Camera EXIF metadata");
+      console.log(`[CAMERA] ✅ Camera EXIF metadata (+25 points)`);
     } else {
-      console.log("[CAMERA] ❌ Artificial/no sensor noise detected");
+      console.log(`[CAMERA] ❌ No camera EXIF metadata (+0 points)`);
     }
+    
+    // NATURAL SENSOR NOISE
+    if (sensorNoise > 0.45 && sensorNoise < 1.8) {
+      cameraScore += 25;
+      reasons.push("Natural sensor noise");
+      console.log(`[CAMERA] ✅ Natural sensor noise: ${sensorNoise.toFixed(3)} (+25 points)`);
+    } else {
+      console.log(`[CAMERA] ❌ Artificial sensor noise: ${sensorNoise.toFixed(3)} (+0 points)`);
+    }
+    
+    // NATURAL JPEG COMPRESSION
+    if (jpegArtifacts > 0.35 && jpegArtifacts < 0.9) {
+      cameraScore += 20;
+      reasons.push("Natural JPEG compression");
+      console.log(`[CAMERA] ✅ Natural JPEG compression: ${jpegArtifacts.toFixed(3)} (+20 points)`);
+    } else {
+      console.log(`[CAMERA] ❌ Artificial JPEG compression: ${jpegArtifacts.toFixed(3)} (+0 points)`);
+    }
+    
+    // NATURAL EDGE VARIATION
+    if (edgeSmoothness < 0.82) {
+      cameraScore += 15;
+      reasons.push("Natural edge transitions");
+      console.log(`[CAMERA] ✅ Natural edge transitions: ${edgeSmoothness.toFixed(3)} (+15 points)`);
+    } else {
+      console.log(`[CAMERA] ❌ Unnatural edge smoothness: ${edgeSmoothness.toFixed(3)} (+0 points)`);
+    }
+    
+    // NATURAL COLOR VARIANCE
+    if (colorVariance > 0.25) {
+      cameraScore += 15;
+      reasons.push("Natural color distribution");
+      console.log(`[CAMERA] ✅ Natural color distribution: ${colorVariance.toFixed(3)} (+15 points)`);
+    } else {
+      console.log(`[CAMERA] ❌ Low color variance: ${colorVariance.toFixed(3)} (+0 points)`);
+    }
+    
   } catch (error) {
-    console.warn("[CAMERA] ⚠️ Sensor noise analysis failed:", error);
+    console.warn("[CAMERA] ⚠️ Camera detection analysis failed:", error);
+    reasons.push("Camera detection analysis failed");
   }
   
-  // 3. NATURAL JPEG CHARACTERISTICS (15 points)
-  try {
-    console.log("[CAMERA] Analyzing JPEG compression characteristics...");
-    const jpegAnalysis = await analyzeNaturalJPEG(base64Data);
-    if (jpegAnalysis.isNatural) {
-      confidence += 15;
-      reasons.push("Natural camera compression characteristics");
-      console.log("[CAMERA] ✅ Natural JPEG compression detected");
-    } else {
-      console.log("[CAMERA] ❌ Artificial/re-compressed JPEG detected");
-    }
-  } catch (error) {
-    console.warn("[CAMERA] ⚠️ JPEG analysis failed:", error);
-  }
+  // Cap at 100
+  cameraScore = Math.min(cameraScore, 100);
   
-  // 4. CAMERA-STYLE RESOLUTION PATTERNS (10 points)
-  try {
-    console.log("[CAMERA] Analyzing resolution patterns...");
-    const { width, height } = metadata.dimensions;
-    
-    // Common mobile camera resolutions (non-screen)
-    const cameraResolutions = [
-      { w: 4080, h: 3072 }, // 12MP
-      { w: 4624, h: 3472 }, // 16MP
-      { w: 4000, h: 3000 }, // 12MP
-      { w: 6000, h: 4000 }, // 24MP
-      { w: 8000, h: 6000 }, // 48MP
-      { w: 12000, h: 9000 }, // 108MP
-    ];
-    
-    const isCameraResolution = cameraResolutions.some(cam => 
-      Math.abs(width - cam.w) <= 100 && Math.abs(height - cam.h) <= 100
-    );
-    
-    // Check for high megapixel count (>= 8MP)
-    const megapixels = (width * height) / 1000000;
-    const isHighMP = megapixels >= 8;
-    
-    // Check for non-standard aspect ratios (not typical screens)
-    const aspectRatio = width / height;
-    const isNonScreenRatio = ![
-      16/9, 16/10, 21/9, 4/3, 3/2, 1/1, 9/16, 9/19.5, 9/20
-    ].some(ratio => Math.abs(aspectRatio - ratio) < 0.1);
-    
-    if (isCameraResolution) {
-      confidence += 10;
-      reasons.push(`Camera-style resolution: ${width}x${height}`);
-      console.log(`[CAMERA] ✅ Camera resolution detected: ${width}x${height}`);
-    } else if (isHighMP && isNonScreenRatio) {
-      confidence += 8;
-      reasons.push(`High megapixel non-screen resolution: ${megapixels.toFixed(1)}MP`);
-      console.log(`[CAMERA] ✅ High MP non-screen resolution: ${megapixels.toFixed(1)}MP`);
-    } else {
-      console.log(`[CAMERA] ❌ Screen/standard resolution: ${width}x${height} (${megapixels.toFixed(1)}MP)`);
-    }
-  } catch (error) {
-    console.warn("[CAMERA] ⚠️ Resolution analysis failed:", error);
-  }
+  detected = cameraScore >= 35;
   
-  // 5. SCREENSHOT EXCLUSION
-  // This will be handled in the priority hierarchy, but log it for debugging
-  console.log("[CAMERA] Screenshot exclusion will be handled by priority hierarchy");
-  
-  // FINAL CAMERA DECISION
-  detected = confidence >= 60;
-  
-  console.log(`[CAMERA] FINAL DECISION - ${detected ? 'DETECTED' : 'NOT DETECTED'} - Confidence: ${confidence}%`);
+  console.log(`[CAMERA] Final Camera Score: ${cameraScore}/100`);
+  console.log(`[CAMERA] Camera Score vs Threshold: ${cameraScore} >= 35 = ${detected ? 'PASS' : 'FAIL'}`);
+  console.log(`[CAMERA] FINAL DECISION - ${detected ? 'DETECTED' : 'NOT DETECTED'} - Confidence: ${cameraScore}%`);
   console.log("[CAMERA] Detection reasons:", reasons);
   
   return {
     detected,
-    confidence,
+    confidence: cameraScore,
     reasons,
     exifData: metadata.hasExif,
     cameraManufacturer: metadata.exifData?.Make
@@ -584,6 +571,9 @@ export async function performForensicAnalysis(
   metadata: ImageMetadata
 ): Promise<ForensicReport> {
   console.log("🔍 Starting complete forensic analysis...");
+  console.log("[DEBUG] ===========================================");
+  console.log("[DEBUG] FORENSIC ANALYSIS - INDIVIDUAL SCORES");
+  console.log("[DEBUG] ===========================================");
   
   // Run all detectors independently and in parallel
   const [
@@ -607,6 +597,94 @@ export async function performForensicAnalysis(
     ai_generated: aiResult,
     camera_original: cameraResult
   };
+  
+  console.log("[DEBUG] ===========================================");
+  console.log("[DEBUG] FORENSIC ANALYSIS - FINAL RESULTS");
+  console.log("[DEBUG] ===========================================");
+  console.log(`[DEBUG] Screenshot: ${screenshotResult.detected ? 'YES' : 'NO'} (${screenshotResult.confidence}% confidence)`);
+  console.log(`[DEBUG] WhatsApp: ${whatsappResult.detected ? 'YES' : 'NO'} (${whatsappResult.confidence}% confidence)`);
+  console.log(`[DEBUG] Downloaded: ${downloadedResult.detected ? 'YES' : 'NO'} (${downloadedResult.confidence}% confidence)`);
+  console.log(`[DEBUG] AI Generated: ${aiResult.probability}% probability`);
+  console.log(`[DEBUG] Camera Original: ${cameraResult.detected ? 'YES' : 'NO'} (${cameraResult.confidence}% confidence)`);
+  
+  // FINAL CLASSIFIER - FIXED LOGIC
+  let imageType = "unknown";
+  let confidence = 0;
+  
+  const aiScore = aiResult.probability;
+  const cameraScore = cameraResult.confidence;
+  const screenshotScore = screenshotResult.confidence;
+  const downloadedScore = downloadedResult.confidence;
+  
+  console.log(`[DEBUG] Raw Scores - AI: ${aiScore}, Camera: ${cameraScore}, Screenshot: ${screenshotScore}, Downloaded: ${downloadedScore}`);
+  
+  // FIXED PRIORITY RULES - Better thresholds for camera detection
+  if (aiScore >= 60 && aiScore > cameraScore) {
+    imageType = "ai";
+    confidence = aiScore;
+    console.log(`[DEBUG] Classified as AI: ${aiScore} >= 60 && > camera(${cameraScore})`);
+  } else if (screenshotScore >= 70) {
+    imageType = "screenshot";
+    confidence = screenshotScore;
+    console.log(`[DEBUG] Classified as Screenshot: ${screenshotScore} >= 70`);
+  } else if (cameraScore >= 45) {  // LOWERED from 35 to 45
+    imageType = "camera";
+    confidence = cameraScore;
+    console.log(`[DEBUG] Classified as Camera: ${cameraScore} >= 45`);
+  } else if (downloadedScore >= 55) {
+    imageType = "downloaded";
+    confidence = downloadedScore;
+    console.log(`[DEBUG] Classified as Downloaded: ${downloadedScore} >= 55`);
+  } else {
+    // Default to camera if it has the highest score (even if below threshold)
+    const scores = { ai: aiScore, camera: cameraScore, screenshot: screenshotScore, downloaded: downloadedScore };
+    const maxScore = Math.max(aiScore, cameraScore, screenshotScore, downloadedScore);
+    const maxType = Object.keys(scores).find(key => scores[key as keyof typeof scores] === maxScore);
+    
+    if (maxType && maxScore > 30) {  // Minimum confidence threshold
+      imageType = maxType;
+      confidence = maxScore;
+      console.log(`[DEBUG] Default classification: ${maxType} with highest score ${maxScore}`);
+    } else {
+      console.log(`[DEBUG] All scores too low, defaulting to unknown`);
+    }
+  }
+  
+  // UI RESULT MAPPING
+  const uiResult = {
+    ai: {
+      source: "AI Generated",
+      camera: false,
+      status: "AI Generated Content"
+    },
+    
+    camera: {
+      source: "Camera Image",
+      camera: true,
+      status: "Authentic Camera Capture"
+    },
+    
+    screenshot: {
+      source: "Screenshot",
+      camera: false,
+      status: "Screen Captured"
+    },
+    
+    downloaded: {
+      source: "Downloaded Image",
+      camera: false,
+      status: "External Source"
+    },
+    
+    unknown: {
+      source: "Unknown",
+      camera: false,
+      status: "Unable To Verify"
+    }
+  };
+  
+  console.log(`[DEBUG] Final Classification: ${imageType} (${confidence}% confidence)`);
+  console.log(`[DEBUG] UI Result:`, uiResult[imageType as keyof typeof uiResult]);
   
   console.log("✅ Forensic analysis complete");
   return report;
@@ -737,10 +815,11 @@ async function analyzeReencodeSignature(base64Data: string): Promise<{
   }
 }
 
+
 /**
- * Analyze texture consistency for AI detection
+ * Analyze color variance for camera detection
  */
-async function analyzeTextureConsistency(base64Data: string): Promise<number> {
+async function analyzeColorVariance(base64Data: string): Promise<number> {
   try {
     if (typeof Image === 'undefined' || typeof document === 'undefined') {
       return 0;
@@ -764,41 +843,20 @@ async function analyzeTextureConsistency(base64Data: string): Promise<number> {
     const imageData = ctx.getImageData(0, 0, 100, 100);
     const data = imageData.data;
     
-    // Calculate texture variance in different regions
-    const regions = [
-      { x: 10, y: 10, w: 30, h: 30 },
-      { x: 60, y: 10, w: 30, h: 30 },
-      { x: 10, y: 60, w: 30, h: 30 },
-      { x: 60, y: 60, w: 30, h: 30 }
-    ];
-    
-    const variances: number[] = [];
-    
-    for (const region of regions) {
-      const regionData: number[] = [];
-      
-      for (let y = region.y; y < region.y + region.h; y++) {
-        for (let x = region.x; x < region.x + region.w; x++) {
-          const idx = (y * 100 + x) * 4;
-          const gray = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-          regionData.push(gray);
-        }
-      }
-      
-      // Calculate variance
-      const mean = regionData.reduce((a, b) => a + b, 0) / regionData.length;
-      const variance = regionData.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / regionData.length;
-      variances.push(variance);
+    // Calculate color variance
+    const colors: number[] = [];
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = (data[i] + data[i + 1] + data[i + 2]) / 3;
+      colors.push(gray);
     }
     
-    // AI images often have very consistent textures across regions
-    const avgVariance = variances.reduce((a, b) => a + b, 0) / variances.length;
-    const varianceOfVariances = variances.reduce((a, b) => a + Math.pow(b - avgVariance, 2), 0) / variances.length;
+    const mean = colors.reduce((a, b) => a + b, 0) / colors.length;
+    const variance = colors.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / colors.length;
     
-    // Lower variance of variances suggests AI (more uniform textures)
-    return 1 - Math.min(varianceOfVariances / 1000, 1);
+    // Normalize to 0-1 range
+    return Math.min(variance / 1000, 1);
   } catch (error) {
-    console.warn("Texture consistency analysis failed:", error);
+    console.warn("Color variance analysis failed:", error);
     return 0;
   }
 }

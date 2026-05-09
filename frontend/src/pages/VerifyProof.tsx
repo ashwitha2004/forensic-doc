@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ArrowLeft, Upload, Camera, Search, CheckCircle, AlertCircle } from "lucide-react";
+import { ArrowLeft, Upload, Camera, Search, CheckCircle, AlertCircle, Shield, TrendingUp, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { extractAdvancedWatermark, type AdvancedWatermarkMetadata } from "@/lib/advancedSteganography";
 import { extractSimpleWatermark, type SimpleWatermarkMetadata } from "@/lib/simpleSteganography";
@@ -15,7 +15,7 @@ interface VerificationResult {
   confidence: number;
   watermarkDetected: boolean;
   pinitEncrypted: boolean;
-  imageSource: 'camera' | 'screenshot' | 'whatsapp' | 'downloaded' | 'unknown';
+  imageType: 'camera' | 'ai' | 'screenshot' | 'edited' | 'unknown';
   aiGeneratedProbability: number;
   metadataStatus: 'original' | 'modified';
   compressionDetected: boolean;
@@ -29,6 +29,17 @@ interface VerificationResult {
     detectionType: string;
     issues: string[];
   };
+  forensicType: string;
+  aiProbability: number;
+  cameraProbability: number;
+  screenshotProbability: number;
+  editedProbability: number;
+  downloadedProbability: number;
+  detectionType?: string;
+  riskLevel?: string;
+  debug?: any;
+  securityStatus?: string;
+  cameraCaptured?: boolean;
 }
 
 const VerifyProof = () => {
@@ -38,31 +49,11 @@ const VerifyProof = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
   const [verificationMode, setVerificationMode] = useState<'auto' | 'advanced' | 'simple'>('auto');
-  const [aiDetectionReady, setAiDetectionReady] = useState(false);
   const [showCameraModal, setShowCameraModal] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  // Initialize AI detection system
-  useEffect(() => {
-    const initializeAIDetection = async () => {
-      try {
-        const aiDetector = getAIDetection();
-        await aiDetector.initialize({
-          modelType: 'resnet',
-          enableMetadataAnalysis: true,
-          enableForensicAnalysis: true,
-          confidenceThreshold: 0.5,
-          enableModelInference: true
-        });
-        setAiDetectionReady(true);
-      } catch (error) {
-        console.warn('AI Detection initialization failed, will use fallback:', error);
-        setAiDetectionReady(true);
-      }
-    };
-    initializeAIDetection();
-  }, []);
+  // Removed AI detection initialization as it's not being used
 
   const handleImageSelect = (imageData: string, fileName: string, source: 'upload' | 'camera' = 'upload') => {
     setSelectedImage(imageData);
@@ -137,54 +128,12 @@ const VerifyProof = () => {
         }
       }
 
-      // Get the capture source from localStorage
+      // Get capture source from localStorage
       const captureSource = localStorage.getItem('current_image_source') as 'upload' | 'camera' | null;
       localStorage.removeItem('current_image_source');
       
       // Perform comprehensive forensic analysis
       const analysis = await analyzeImage(selectedImage, selectedFileName || undefined, captureSource || undefined);
-      
-      // Determine image source using TRUSTED SOURCE PRIORITY
-      let imageSource: 'camera' | 'screenshot' | 'whatsapp' | 'downloaded' | 'unknown';
-      
-      if (captureSource === 'camera') {
-        imageSource = "camera";
-      } else if (analysis.forensicReport) {
-        const fr = analysis.forensicReport;
-        
-        if (fr.screenshot.detected) {
-          imageSource = "screenshot";
-        }
-        else if (fr.whatsapp.detected) {
-          imageSource = "whatsapp";
-        }
-        else if (fr.camera_original.detected) {
-          imageSource = "camera";
-        }
-        else if (fr.downloaded.detected) {
-          imageSource = "downloaded";
-        }
-        else {
-          imageSource = "unknown";
-        }
-      } else {
-        switch (analysis.imageType) {
-          case "screenshot":
-            imageSource = "screenshot";
-            break;
-          case "phone":
-            imageSource = "camera";
-            break;
-          case "whatsapp":
-            imageSource = "whatsapp";
-            break;
-          case "ai":
-            imageSource = "downloaded";
-            break;
-          default:
-            imageSource = "unknown";
-        }
-      }
       
       // Use AI detection system
       let aiDetectionResult: IntegratedDetectionResult | null = null;
@@ -196,18 +145,20 @@ const VerifyProof = () => {
         aiProbability = aiDetectionResult.confidence * 100;
       } catch (error) {
         console.warn('AI detection failed, falling back to forensic analysis:', error);
-        aiProbability = analysis.forensicReport?.ai_generated.probability || 0;
+        aiProbability = analysis.forensicReport?.aiProbability || 0;
       }
       
       const metadataStatus = analysis.metadata.hasExif ? 'original' : 'modified';
-      const compressionDetected = analysis.forensicReport?.whatsapp.detected || false;
+      const compressionDetected = (analysis.forensicReport?.editedProbability || 0) > 50;
       
       // Calculate trust score
-      const trustScore = 100; // Simplified - you can keep the original calculation if needed
+      const trustScore = 100; // Simplified - you can keep original calculation if needed
       
       // Determine authenticity
       const isAuthentic = watermarkDetected && pinitEncrypted && trustScore >= 70;
-      const confidence = isAuthentic ? 0.85 + (Math.random() * 0.14) : 0.15 + (Math.random() * 0.3);
+      
+      // Use forensic confidence instead of random values
+      const confidence = Math.round(analysis.confidence);
 
       // Identify issues
       const issues: string[] = [];
@@ -228,13 +179,25 @@ const VerifyProof = () => {
         issues.push('Image compression detected');
       }
 
+      // Map image type to correct enum values
+      const imageType = analysis.imageType;
+      
+      const cameraCaptured = imageType === 'camera';
+      const securityStatus = cameraCaptured ? 'Authentic Camera Capture' :
+                           imageType === 'ai' ? 'Synthetic AI Generated Image' :
+                           imageType === 'screenshot' ? 'Screen Captured Content' :
+                           imageType === 'edited' ? 'Manipulated or Edited Image' :
+                           'Unable To Verify';
+
       result = {
         success: true,
         isAuthentic,
         confidence,
         watermarkDetected,
         pinitEncrypted,
-        imageSource,
+        imageType,
+        cameraCaptured,
+        securityStatus,
         aiGeneratedProbability: aiProbability,
         metadataStatus,
         compressionDetected,
@@ -244,9 +207,16 @@ const VerifyProof = () => {
         details: {
           fileName,
           timestamp,
-          detectionType: watermarkDetected ? detectionType : 'No Watermark',
+          detectionType,
           issues
-        }
+        },
+        // Add missing properties as requested
+        forensicType: analysis.imageType,
+        aiProbability: analysis.forensicReport?.aiProbability || 0,
+        cameraProbability: analysis.forensicReport?.cameraProbability || 0,
+        screenshotProbability: analysis.forensicReport?.screenshotProbability || 0,
+        editedProbability: analysis.forensicReport?.editedProbability || 0,
+        downloadedProbability: analysis.forensicReport?.downloadedProbability || 0
       };
 
       setVerificationResult(result);
@@ -259,11 +229,19 @@ const VerifyProof = () => {
         confidence: 0,
         watermarkDetected: false,
         pinitEncrypted: false,
-        imageSource: 'unknown',
+        imageType: 'unknown',
+        cameraCaptured: false,
+        securityStatus: 'Unable To Verify',
         aiGeneratedProbability: 0,
         metadataStatus: 'modified',
         compressionDetected: false,
         trustScore: 0,
+        forensicType: 'unknown',
+        aiProbability: 0,
+        cameraProbability: 0,
+        screenshotProbability: 0,
+        editedProbability: 0,
+        downloadedProbability: 0,
         error: error instanceof Error ? error.message : 'Verification failed',
         details: {
           fileName: `error_image_${Date.now()}.jpg`,
@@ -286,42 +264,44 @@ const VerifyProof = () => {
     }
   };
 
-  // Helper functions for simplified display
-  const getSecurityStatus = (result: VerificationResult) => {
-    if (result.error) return 'Error';
-    if (result.isAuthentic) return 'Authentic';
-    return 'Suspicious';
-  };
-
-  const getImageSourceDisplay = (imageSource: string) => {
-    switch (imageSource) {
-      case 'camera': return 'Camera Image';
-      case 'screenshot': return 'Screenshot';
-      case 'whatsapp': return 'Downloaded Image';
-      case 'downloaded': return 'Downloaded Image';
-      default: return 'Non-Camera Image';
-    }
-  };
-
-  const getCameraCaptured = (imageSource: string) => {
-    return imageSource === 'camera';
-  };
-
-  const getConfidencePercentage = (result: VerificationResult) => {
-    return Math.round(result.confidence * 100);
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
+  // Helper functions for improved UI display
+  const getSecurityStatusColor = (status: string) => {
+    switch (status?.toLowerCase()) {
       case 'authentic':
         return 'text-green-400';
-      case 'suspicious':
+      case 'synthetic media':
+        return 'text-red-400';
+      case 'digital capture':
         return 'text-yellow-400';
+      case 'modified':
+        return 'text-orange-400';
+      case 'external source':
+        return 'text-blue-400';
       case 'error':
         return 'text-red-400';
       default:
         return 'text-gray-400';
     }
+  };
+
+  const getRiskLevelColor = (level: string) => {
+    switch (level.toLowerCase()) {
+      case 'low':
+        return 'text-green-400';
+      case 'medium':
+        return 'text-yellow-400';
+      case 'high':
+        return 'text-red-400';
+      default:
+        return 'text-gray-400';
+    }
+  };
+
+  const getConfidenceColor = (confidence: number) => {
+    if (confidence >= 90) return 'text-green-400';
+    if (confidence >= 80) return 'text-yellow-400';
+    if (confidence >= 70) return 'text-orange-400';
+    return 'text-red-400';
   };
 
   return (
@@ -345,7 +325,7 @@ const VerifyProof = () => {
             </Button>
             <div>
               <h1 className="text-lg font-semibold text-foreground">Verify Proof</h1>
-              <p className="text-xs text-muted-foreground">Unified image verification</p>
+              <p className="text-xs text-muted-foreground">Improved image verification system</p>
             </div>
           </div>
           <Search className="w-6 h-6 text-muted-foreground" />
@@ -424,14 +404,14 @@ const VerifyProof = () => {
                     <div className="flex gap-4">
                       <button
                         onClick={() => fileInputRef.current?.click()}
-                        className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg transition-colors flex items-center gap-2"
+                        className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white px-6 py-3 rounded-lg transition-colors flex items-center gap-2"
                       >
                         <Upload className="w-4 h-4" />
                         Upload File
                       </button>
                       <button
                         onClick={handleCameraCapture}
-                        className="bg-cyan-600 hover:bg-cyan-700 text-white px-6 py-3 rounded-lg transition-colors flex items-center gap-2"
+                        className="bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white px-6 py-3 rounded-lg transition-colors flex items-center gap-2"
                       >
                         <Camera className="w-4 h-4" />
                         Use Camera
@@ -493,7 +473,7 @@ const VerifyProof = () => {
             </motion.div>
           </>
         ) : (
-          /* Results Section - SIMPLIFIED DISPLAY */
+          /* Results Section - IMPROVED UI */
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -501,36 +481,46 @@ const VerifyProof = () => {
           >
             {!verificationResult.error ? (
               <div className="bg-background/80 backdrop-blur-lg border border-border/50 rounded-2xl p-8">
+                {/* Status Header */}
                 <div className="text-center mb-8">
                   <div className={`inline-flex items-center px-6 py-3 rounded-full mb-4 ${
-                    verificationResult.isAuthentic 
+                    verificationResult.securityStatus === 'Authentic' 
                       ? 'bg-green-500/20 border-green-500/30' 
-                      : verificationResult.trustScore >= 50 
-                        ? 'bg-yellow-500/20 border-yellow-500/30'
-                        : 'bg-red-500/20 border-red-500/30'
+                      : verificationResult.securityStatus === 'External Source'
+                        ? 'bg-blue-500/20 border-blue-500/30'
+                        : verificationResult.securityStatus === 'Digital Capture'
+                          ? 'bg-yellow-500/20 border-yellow-500/30'
+                          : verificationResult.securityStatus === 'Modified'
+                            ? 'bg-orange-500/20 border-orange-500/30'
+                            : 'bg-red-500/20 border-red-500/30'
                   }`}>
-                    {verificationResult.isAuthentic ? (
+                    {verificationResult.securityStatus === 'Authentic' ? (
                       <CheckCircle className="w-6 h-6 text-green-400 mr-2" />
                     ) : (
                       <AlertCircle className="w-6 h-6 text-red-400 mr-2" />
                     )}
                     <span className={`font-bold text-lg ${
-                      verificationResult.isAuthentic 
+                      verificationResult.securityStatus === 'Authentic' 
                         ? 'text-green-400' 
-                        : verificationResult.trustScore >= 50 
-                          ? 'text-yellow-400'
-                          : 'text-red-400'
+                        : verificationResult.securityStatus === 'External Source'
+                          ? 'text-blue-400'
+                          : verificationResult.securityStatus === 'Digital Capture'
+                            ? 'text-yellow-400'
+                            : verificationResult.securityStatus === 'Modified'
+                              ? 'text-orange-400'
+                              : 'text-red-400'
                     }`}>
-                      {getSecurityStatus(verificationResult).toUpperCase()}
+                      {verificationResult.securityStatus}
                     </span>
                   </div>
                 </div>
 
-                {/* SIMPLIFIED VERIFICATION REPORT */}
+                {/* IMPROVED VERIFICATION REPORT */}
                 <div className="bg-accent/30 rounded-xl p-6">
-                  <h3 className="text-xl font-bold text-foreground mb-6 text-center">VERIFY REPORT</h3>
+                  <h3 className="text-xl font-bold text-foreground mb-6 text-center">VERIFICATION REPORT</h3>
                   
                   <div className="space-y-4">
+                    {/* PINIT Encryption */}
                     <div className="flex justify-between items-center bg-background/50 rounded-lg p-4">
                       <span className="text-sm font-medium text-muted-foreground">PINIT Encryption:</span>
                       <span className={`text-lg font-bold ${
@@ -540,50 +530,91 @@ const VerifyProof = () => {
                       </span>
                     </div>
                     
+                    {/* Camera Captured */}
                     <div className="flex justify-between items-center bg-background/50 rounded-lg p-4">
                       <span className="text-sm font-medium text-muted-foreground">Camera Captured:</span>
                       <span className={`text-lg font-bold ${
-                        getCameraCaptured(verificationResult.imageSource) ? 'text-green-400' : 'text-red-400'
+                        verificationResult.cameraCaptured ? 'text-green-400' : 'text-red-400'
                       }`}>
-                        {getCameraCaptured(verificationResult.imageSource) ? 'YES' : 'NO'}
+                        {verificationResult.cameraCaptured ? 'YES' : 'NO'}
                       </span>
                     </div>
                     
+                    {/* Image Source - MEANINGFUL CATEGORY */}
                     <div className="flex justify-between items-center bg-background/50 rounded-lg p-4">
                       <span className="text-sm font-medium text-muted-foreground">Image Source:</span>
                       <span className={`text-lg font-bold text-foreground capitalize`}>
-                        {getImageSourceDisplay(verificationResult.imageSource)}
+                        {verificationResult.imageType}
                       </span>
                     </div>
                     
+                    {/* Security Status */}
                     <div className="flex justify-between items-center bg-background/50 rounded-lg p-4">
                       <span className="text-sm font-medium text-muted-foreground">Security Status:</span>
-                      <span className={`text-lg font-bold ${getStatusColor(getSecurityStatus(verificationResult))}`}>
-                        {getSecurityStatus(verificationResult).toUpperCase()}
+                      <span className={`text-lg font-bold ${getSecurityStatusColor(verificationResult.securityStatus)}`}>
+                        {verificationResult.securityStatus}
                       </span>
                     </div>
                     
+                    {/* Confidence */}
                     <div className="flex justify-between items-center bg-background/50 rounded-lg p-4">
                       <span className="text-sm font-medium text-muted-foreground">Confidence:</span>
-                      <span className={`text-lg font-bold ${
-                        getConfidencePercentage(verificationResult) >= 90 ? 'text-green-400' :
-                        getConfidencePercentage(verificationResult) >= 70 ? 'text-yellow-400' :
-                        'text-red-400'
-                      }`}>
-                        {getConfidencePercentage(verificationResult)}%
+                      <span className={`text-lg font-bold ${getConfidenceColor(verificationResult.confidence)}`}>
+                        {Math.round(verificationResult.confidence)}%
                       </span>
                     </div>
                   </div>
-                </div>
 
-                <div className="flex justify-center mt-8">
-                  <Button
-                    onClick={resetForm}
-                    variant="outline"
-                    className="border-purple-500/50 text-purple-400 hover:bg-purple-500/10"
-                  >
-                    Verify Another Image
-                  </Button>
+                  {/* ADDITIONAL ANALYSIS DETAILS */}
+                  <div className="mt-6 space-y-4">
+                    <h4 className="text-lg font-semibold text-foreground mb-4">Analysis Details</h4>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Detection Type */}
+                      <div className="bg-background/50 rounded-lg p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Shield className="w-5 h-5 text-blue-400" />
+                          <span className="text-sm font-medium text-muted-foreground">Detection Type</span>
+                        </div>
+                        <div className={`text-lg font-bold ${getSecurityStatusColor(verificationResult.securityStatus)}`}>
+                          {verificationResult.detectionType || 'Unknown'}
+                        </div>
+                      </div>
+                      
+                      {/* Risk Level */}
+                      <div className="bg-background/50 rounded-lg p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertTriangle className="w-5 h-5 text-orange-400" />
+                          <span className="text-sm font-medium text-muted-foreground">Risk Level</span>
+                        </div>
+                        <div className={`text-lg font-bold ${getRiskLevelColor(verificationResult.riskLevel || 'Medium')}`}>
+                          {verificationResult.riskLevel || 'Medium'}
+                        </div>
+                      </div>
+                      
+                      {/* Metadata Status */}
+                      <div className="bg-background/50 rounded-lg p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <TrendingUp className="w-5 h-5 text-purple-400" />
+                          <span className="text-sm font-medium text-muted-foreground">Metadata Status</span>
+                        </div>
+                        <div className={`text-lg font-bold ${getSecurityStatusColor(verificationResult.securityStatus)}`}>
+                          {verificationResult.metadataStatus}
+                        </div>
+                      </div>
+                      
+                      {/* Compression Status */}
+                      <div className="bg-background/50 rounded-lg p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertCircle className="w-5 h-5 text-yellow-400" />
+                          <span className="text-sm font-medium text-muted-foreground">Compression Status</span>
+                        </div>
+                        <div className={`text-lg font-bold ${getSecurityStatusColor(verificationResult.securityStatus)}`}>
+                          {verificationResult.compressionDetected ? 'Detected' : 'Not Detected'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : (
