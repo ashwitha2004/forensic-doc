@@ -5,7 +5,6 @@
   "outputDirectory": "dist",
   "installCommand": "npm install",
   "framework": "vite",
-  "rootDirectory": "frontend",
   "env": {
     "VITE_BACKEND_URL": "https://pinit-image-detection.onrender.com"
   }
