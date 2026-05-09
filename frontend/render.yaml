@@ -8,9 +8,9 @@ services:
     routes:
       - type: rewrite
         source: /api/*
-        destination: https://pinit-backend.onrender.com/api/*
+        destination: https://pinit-image-detection.onrender.com/api/*
     envVars:
       - key: NODE_ENV
         value: production
       - key: VITE_API_URL
-        value: https://pinit-backend.onrender.com
+        value: https://pinit-image-detection.onrender.com
