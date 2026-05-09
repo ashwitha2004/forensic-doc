@@ -1,15 +1,17 @@
 import { MetadataAnalyzer, MetadataAnalysisResult } from './metadataAnalyzer';
 import { ImagePreprocessor, ProcessedImageResult } from './imagePreprocess';
 import { AIModel, ModelPredictionResult } from './aiModel';
+import { aiInference, AIInferenceResult } from './aiInference';
 
 export interface AIDetectionResult {
   isAIGenerated: boolean;
   confidence: number;
   metadataAnalysis: MetadataAnalysisResult;
   modelPrediction: ModelPredictionResult | null;
+  aiInferenceResult: AIInferenceResult | null;
   forensicAnalysis: ForensicAnalysisResult;
   combinedScore: number;
-  detectionMethod: 'metadata' | 'model' | 'combined';
+  detectionMethod: 'metadata' | 'model' | 'inference' | 'combined';
   processingTime: number;
   aiTool: string | null;
   recommendations: string[];
@@ -78,13 +80,25 @@ export class AIDetector {
         }
       }
 
-      // Step 3: Forensic Analysis
+      // Step 3: AI Inference Analysis (TensorFlow pixel analysis)
+      let aiInferenceResult: AIInferenceResult | null = null;
+      try {
+        // Convert file to base64 for inference
+        const base64Data = await this.fileToBase64(file);
+        aiInferenceResult = await aiInference.analyzeImage(base64Data);
+      } catch (error) {
+        console.warn('AI inference analysis failed:', error instanceof Error ? error.message : String(error));
+        aiInferenceResult = null;
+      }
+
+      // Step 4: Forensic Analysis
       const forensicAnalysis = await this.performForensicAnalysis(file, processedImage);
 
-      // Step 4: Combine all results
+      // Step 5: Combine all results
       const combinedResult = this.combineResults(
         metadataAnalysis,
         modelPrediction,
+        aiInferenceResult,
         forensicAnalysis
       );
 
@@ -99,6 +113,7 @@ export class AIDetector {
         ...combinedResult,
         metadataAnalysis,
         modelPrediction,
+        aiInferenceResult,
         forensicAnalysis,
         processingTime,
         recommendations: this.generateRecommendations(combinedResult)
@@ -106,6 +121,27 @@ export class AIDetector {
     } catch (error) {
       throw new Error(`AI detection failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  /**
+   * Convert file to base64
+   */
+  private async fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (reader.result) {
+          const base64 = reader.result as string;
+          // Remove data URL prefix if present
+          const base64Data = base64.includes(',') ? base64.split(',')[1] : base64;
+          resolve(base64Data);
+        } else {
+          reject(new Error('Failed to convert file to base64'));
+        }
+      };
+      reader.onerror = () => reject(new Error('FileReader error'));
+      reader.readAsDataURL(file);
+    });
   }
 
   /**
@@ -320,18 +356,20 @@ export class AIDetector {
   private combineResults(
     metadata: MetadataAnalysisResult,
     model: ModelPredictionResult | null,
+    inference: AIInferenceResult | null,
     forensic: ForensicAnalysisResult
-  ): Omit<AIDetectionResult, 'metadataAnalysis' | 'modelPrediction' | 'forensicAnalysis' | 'processingTime' | 'recommendations'> {
+  ): Omit<AIDetectionResult, 'metadataAnalysis' | 'modelPrediction' | 'aiInferenceResult' | 'forensicAnalysis' | 'processingTime' | 'recommendations'> {
     let combinedScore = 0;
-    let detectionMethod: 'metadata' | 'model' | 'combined' = 'metadata';
+    let detectionMethod: 'metadata' | 'model' | 'inference' | 'combined' = 'metadata';
     let isAIGenerated = false;
     let confidence = 0;
     let aiTool = metadata.aiTool;
 
-    // Weight factors
-    const metadataWeight = 0.3;
-    const modelWeight = 0.5;
-    const forensicWeight = 0.2;
+    // Weight factors - AI inference gets highest weight
+    const metadataWeight = 0.2;
+    const modelWeight = 0.3;
+    const inferenceWeight = 0.4;
+    const forensicWeight = 0.1;
 
     // Calculate weighted score
     combinedScore += metadata.metadataScore * metadataWeight;
@@ -345,11 +383,38 @@ export class AIDetector {
       confidence = metadata.confidence;
     }
 
+    // Add AI inference score with highest priority
+    if (inference) {
+      combinedScore += inference.confidence * inferenceWeight;
+      if (detectionMethod === 'metadata') {
+        detectionMethod = 'inference';
+      } else {
+        detectionMethod = 'combined';
+      }
+      confidence = Math.max(confidence, inference.confidence);
+    }
+
     combinedScore += Math.min(forensic.score, 1.0) * forensicWeight;
 
-    // Final determination
-    isAIGenerated = combinedScore > 0.5;
-    confidence = Math.max(confidence, combinedScore);
+    // AI DETECTION HAS HIGHEST PRIORITY
+    // If any AI signal is strong, classify as AI regardless of other factors
+    const aiSignals = [
+      metadata.isAIGenerated ? metadata.confidence : 0,
+      model?.aiProbability || 0,
+      inference?.confidence || 0
+    ];
+    
+    const maxAISignal = Math.max(...aiSignals);
+    
+    // AI detection overrides everything if confidence is high
+    if (maxAISignal > 0.6) {
+      isAIGenerated = true;
+      confidence = maxAISignal;
+      combinedScore = Math.max(combinedScore, maxAISignal);
+    } else {
+      isAIGenerated = combinedScore > 0.5;
+      confidence = Math.max(confidence, combinedScore);
+    }
 
     // If metadata detected a specific AI tool, use that
     if (metadata.aiTool) {
@@ -368,7 +433,7 @@ export class AIDetector {
   /**
    * Generate recommendations based on detection results
    */
-  private generateRecommendations(result: Omit<AIDetectionResult, 'metadataAnalysis' | 'modelPrediction' | 'forensicAnalysis' | 'processingTime' | 'recommendations'>): string[] {
+  private generateRecommendations(result: Omit<AIDetectionResult, 'metadataAnalysis' | 'modelPrediction' | 'aiInferenceResult' | 'forensicAnalysis' | 'processingTime' | 'recommendations'>): string[] {
     const recommendations: string[] = [];
 
     if (result.isAIGenerated) {
@@ -395,8 +460,12 @@ export class AIDetector {
 
     if (result.detectionMethod === 'metadata') {
       recommendations.push('Detection based on metadata analysis only');
+    } else if (result.detectionMethod === 'model') {
+      recommendations.push('Detection based on AI model analysis');
+    } else if (result.detectionMethod === 'inference') {
+      recommendations.push('Detection based on TensorFlow AI inference analysis');
     } else if (result.detectionMethod === 'combined') {
-      recommendations.push('Detection based on combined AI model and metadata analysis');
+      recommendations.push('Detection based on combined AI analysis methods');
     }
 
     return recommendations;

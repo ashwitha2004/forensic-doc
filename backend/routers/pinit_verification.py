@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from db.database import get_admin_db
 from models.schemas import (
     EncryptionRecordCreate, 
@@ -8,10 +8,14 @@ from models.schemas import (
     WatermarkExtraction
 )
 from utils.auth_helpers import log_action
+from detector.unified_verifier import verify_image
+from detector.camera_detector import detect_camera_origin
 import uuid
 import hashlib
 import json
 import base64
+import tempfile
+import os
 from datetime import datetime
 from typing import Optional, Dict, Any
 
@@ -385,3 +389,64 @@ async def verify_watermark_by_id(watermark_id: str):
     except Exception as e:
         print(f"[VERIFY] Failed to verify watermark: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
+
+
+@router.post("/verify-unified")
+async def verify_image_unified(file: UploadFile = File(...)):
+    """
+    Unified image verification - detects PinIT encryption and camera origin
+    Returns simplified verification result
+    """
+    print(f"[VERIFY_UNIFIED] Starting unified verification for file: {file.filename}")
+    
+    # File validation
+    if not file.filename:
+        return {"error": "No file selected"}
+    
+    allowed = ['jpg', 'jpeg', 'png']
+    file_ext = file.filename.lower().split('.')[-1] if '.' in file.filename else ''
+    
+    if file_ext not in allowed:
+        return {"error": f"Invalid file type. Allowed: {', '.join(allowed)}"}
+    
+    try:
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}") as temp_file:
+            # Read uploaded file content
+            content = await file.read()
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+        
+        try:
+            # Run unified verification
+            result = verify_image(temp_file_path)
+            
+            print(f"[VERIFY_UNIFIED] ✅ Verification completed:")
+            print(f"[VERIFY_UNIFIED]   - PinIT Encrypted: {result['pinit_encrypted']}")
+            print(f"[VERIFY_UNIFIED]   - Camera Captured: {result['camera_captured']}")
+            print(f"[VERIFY_UNIFIED]   - Image Source: {result['image_source']}")
+            print(f"[VERIFY_UNIFIED]   - Security Status: {result['security_status']}")
+            print(f"[VERIFY_UNIFIED]   - Confidence: {result['confidence']}")
+            
+            return result
+            
+        finally:
+            # Clean up temporary file
+            try:
+                os.unlink(temp_file_path)
+            except:
+                pass  # Ignore cleanup errors
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[VERIFY_UNIFIED] ❌ Verification failed: {str(e)}")
+        # Return a proper error response instead of raising HTTPException
+        return {
+            "pinit_encrypted": False,
+            "camera_captured": False,
+            "image_source": "Processing Error",
+            "security_status": "Error",
+            "confidence": 0,
+            "error": str(e)
+        }

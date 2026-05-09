@@ -5,7 +5,7 @@ export interface IntegratedDetectionResult {
   aiGenerated: boolean;
   confidence: number;
   aiTool: string | null;
-  detectionMethod: 'metadata' | 'model' | 'combined';
+  detectionMethod: 'metadata' | 'model' | 'inference' | 'combined';
   processingTime: number;
   recommendations: string[];
   modelLoaded: boolean;

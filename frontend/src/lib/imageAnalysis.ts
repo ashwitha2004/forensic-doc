@@ -77,11 +77,11 @@ export async function analyzeImage(base64Data: string, filename?: string, source
       // PRIORITY 2: Forensic analysis for uploaded files
       console.log("🔬 Using forensic analysis for uploaded file");
       
-      // Priority-based classification based on forensic confidence
+      // Priority-based classification - AI has HIGHEST priority
       const detections = [
-        { type: "ai" as const, detected: forensicReport.ai_generated.probability > 60, confidence: forensicReport.ai_generated.probability, reasons: forensicReport.ai_generated.reasons },
-        { type: "whatsapp" as const, detected: forensicReport.whatsapp.detected, confidence: forensicReport.whatsapp.confidence, reasons: forensicReport.whatsapp.reasons },
+        { type: "ai" as const, detected: forensicReport.ai_generated.probability > 50, confidence: forensicReport.ai_generated.probability, reasons: forensicReport.ai_generated.reasons },
         { type: "screenshot" as const, detected: forensicReport.screenshot.detected, confidence: forensicReport.screenshot.confidence, reasons: forensicReport.screenshot.reasons },
+        { type: "whatsapp" as const, detected: forensicReport.whatsapp.detected, confidence: forensicReport.whatsapp.confidence, reasons: forensicReport.whatsapp.reasons },
         { type: "phone" as const, detected: forensicReport.camera_original.detected, confidence: forensicReport.camera_original.confidence, reasons: forensicReport.camera_original.reasons }
       ];
 
@@ -118,21 +118,21 @@ export async function analyzeImage(base64Data: string, filename?: string, source
         indicators.push("AI detection unavailable");
       }
 
-      if (aiScore > 60) {
+      if (aiScore > 50) {
         imageType = "ai";
         confidence = aiScore;
         indicators.push("🤖 AI-generated image detected");
         indicators.push("Possible tools: DALL-E, Midjourney, Stable Diffusion");
-      } else if (detectedWhatsApp(dimensions)) {
-        imageType = "whatsapp";
-        confidence = 85;
-        indicators.push("📱 WhatsApp origin detected");
-        indicators.push("Typical WhatsApp compression found");
       } else if (detectedScreenshot(dimensions)) {
         imageType = "screenshot";
         confidence = 80;
-        indicators.push("📸 Screenshot detected");
+        indicators.push("� Screenshot detected");
         indicators.push("Typical screen resolution aspect ratio");
+      } else if (detectedWhatsApp(dimensions)) {
+        imageType = "whatsapp";
+        confidence = 85;
+        indicators.push("� WhatsApp origin detected");
+        indicators.push("Typical WhatsApp compression found");
       } else {
         imageType = "phone";
         confidence = 70;
