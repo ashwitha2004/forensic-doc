@@ -12,5 +12,5 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: VITE_API_URL
+      - key: VITE_BACKEND_URL
         value: https://pinit-image-detection.onrender.com

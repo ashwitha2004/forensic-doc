@@ -17,7 +17,7 @@
     }
   ],
   "env": {
-    "VITE_API_URL": "@api_url"
+    "VITE_BACKEND_URL": "https://pinit-image-detection.onrender.com"
   },
   "buildCommand": "npm run build",
   "outputDirectory": "dist",

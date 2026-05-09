@@ -20,9 +20,9 @@ type AuthStore = {
 const STORE_KEY = "biovault_auth_store_v1";
 
 function apiBase(): string {
-  const baseUrl = (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000").trim();
+  const baseUrl = (import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000").trim();
   console.log('🌐 API Base URL:', baseUrl);
-  console.log('🌐 Environment VITE_API_URL:', import.meta.env.VITE_API_URL);
+  console.log('🌐 Environment VITE_BACKEND_URL:', import.meta.env.VITE_BACKEND_URL);
   return baseUrl;
 }
 

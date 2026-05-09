@@ -45,7 +45,7 @@
 ## 🔧 Environment Variables Required
 
 ```bash
-VITE_API_URL=https://pinit-backend.onrender.com
+VITE_BACKEND_URL=https://pinit-image-detection.onrender.com
 NODE_ENV=production
 ```
 

@@ -1,6 +1,6 @@
 // API Client for BioVault Backend
 // Use environment variable for API URL (default to local backend)
-const BASE_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').trim();
+const BASE_URL = (import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000').trim();
 
 const getToken = () => {
   try {
