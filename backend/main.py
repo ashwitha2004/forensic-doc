@@ -11,6 +11,7 @@ env_path = Path(__file__).parent / ".env"
 load_dotenv(env_path)
 
 from routers import auth, vault, pinit_verification
+from forensic import forensic_router
 
 app = FastAPI(
     title       = "PINIT API",
@@ -53,6 +54,9 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth")
 app.include_router(vault.router, prefix="/vault")
 app.include_router(pinit_verification.router, prefix="/pinit")
+
+# Register forensic analysis router
+app.include_router(forensic_router)
 
 # ════════════════════════════════════════════════════════════════
 # CORE PINIT VERIFICATION SYSTEM - Lightweight and focused

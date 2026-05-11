@@ -142,7 +142,7 @@ const Home = () => {
               </div>
               <h3 className="text-lg font-semibold text-foreground mb-2">Verify Proof</h3>
               <p className="text-sm text-muted-foreground mb-4">
-                Verify document authenticity with advanced detection algorithms
+                Advanced forensic analysis to verify image authenticity and detect manipulation
               </p>
               <Button
                 onClick={() => navigate('/verify-proof')}

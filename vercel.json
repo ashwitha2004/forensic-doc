@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "name": "pinit-image-detection",
+  "rootDirectory": "frontend",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "installCommand": "npm install",
+  "framework": "vite",
+  "env": {
+    "VITE_BACKEND_URL": "https://pinit-image-detection.onrender.com"
+  }
+}

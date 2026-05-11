@@ -4,16 +4,16 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Component, ReactNode } from "react";
-import Index from "./pages/Index.tsx";
-import Login from "./pages/Login.tsx";
-import Register from "./pages/Register.tsx";
-import NotFound from "./pages/NotFound.tsx";
-import ProtectedRoute from "./components/ProtectedRoute.tsx";
-import Home from "./pages/Home.tsx";
-import Encrypt from "./pages/Encrypt.tsx";
+import Index from "./pages/Index";
+import Login from "./pages/Login";
+import Register from "./pages/Register";
+import NotFound from "./pages/NotFound";
+import ProtectedRoute from "./components/ProtectedRoute";
+import Home from "./pages/Home";
+import Encrypt from "./pages/Encrypt";
 import VerifyProof from "./pages/VerifyProof.tsx";
-import DetectionResult from "./pages/DetectionResult.tsx";
-import AIDetectionTest from "./pages/AIDetectionTest.tsx";
+import DetectionResult from "./pages/DetectionResult";
+import AIDetectionTest from "./pages/AIDetectionTest";
 
 // ===================== GLOBAL ERROR BOUNDARY =====================
 class ErrorBoundary extends Component<
