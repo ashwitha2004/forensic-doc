@@ -4,6 +4,7 @@
  */
 
 import { performForensicAnalysis, ForensicAnalysisResult as ForensicReport } from './forensicDetectionFixed';
+import exifr from 'exifr';
 
 export interface ImageMetadata {
   dimensions: { width: number; height: number };
@@ -40,8 +41,8 @@ export async function analyzeImage(base64Data: string, filename?: string, source
   try {
     console.log("🔍 Analyzing image with layered forensic detection...");
 
-    // Extract basic metadata
-    const forensicMetadata: ImageMetadata = await extractImageMetadata(base64Data);
+    // Extract basic metadata (real dimensions, real mime, real EXIF — Phase 1)
+    const forensicMetadata: ImageMetadata = await extractImageMetadata(base64Data, filename);
     const dimensions = forensicMetadata.dimensions;
 
     console.log("📊 Image metadata extracted:", {
@@ -136,13 +137,82 @@ export async function analyzeImage(base64Data: string, filename?: string, source
 }
 
 // Helper function to extract basic image metadata
-async function extractImageMetadata(base64Data: string): Promise<ImageMetadata> {
-  // Simplified metadata extraction - in production you'd use proper EXIF parsing
+// Phase 1: replaced the hard-coded stub with real extraction so dimensions, mime,
+// and EXIF flow correctly into the rest of the forensic pipeline. Function
+// signature is unchanged from the perspective of every existing caller
+// (filename was added as an optional parameter — defaults to undefined).
+async function extractImageMetadata(
+  base64Data: string,
+  filename?: string
+): Promise<ImageMetadata> {
+  // 1. Real dimensions (browser-only; safe fallback to 0×0 for SSR/test envs)
+  let dimensions = { width: 0, height: 0 };
+  try {
+    dimensions = await getImageDimensions(base64Data);
+  } catch (err) {
+    console.warn('[metadata] dimension extraction failed:', err);
+  }
+
+  // 2. Real mime type from the data URL header (defaults to image/jpeg if absent)
+  let mimeType = 'image/jpeg';
+  const mimeMatch = /^data:([^;]+);base64,/i.exec(base64Data);
+  if (mimeMatch && mimeMatch[1]) {
+    mimeType = mimeMatch[1].toLowerCase();
+  }
+
+  // 3. Real byte size — base64 encodes 3 bytes per 4 chars, minus padding
+  let fileSize = 0;
+  try {
+    const commaIdx = base64Data.indexOf(',');
+    const b64 = commaIdx >= 0 ? base64Data.slice(commaIdx + 1) : base64Data;
+    const padding = (b64.match(/=+$/) || [''])[0].length;
+    fileSize = Math.max(0, Math.floor((b64.length * 3) / 4) - padding);
+  } catch {
+    fileSize = base64Data.length * 0.75; // legacy fallback
+  }
+
+  // 4. Real EXIF via exifr (no-op for PNGs and EXIF-stripped JPEGs)
+  let exifData: any = undefined;
+  let hasExif = false;
+  try {
+    // exifr accepts data URLs directly. silent:true so it doesn't throw on
+    // images without EXIF (most PNGs, screenshots, AI-generated, re-uploads).
+    const parsed = await exifr.parse(base64Data, {
+      tiff: true,
+      ifd0: true,
+      exif: true,
+      gps: false,
+      interop: false,
+      makerNote: false,
+      userComment: false,
+      silentErrors: true,
+    } as any);
+    if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+      exifData = parsed;
+      // Treat as "has EXIF" only if camera-meaningful fields are present.
+      // This prevents an empty/near-empty EXIF block from masquerading as a
+      // real camera capture (a common pattern in editor re-saves).
+      hasExif = Boolean(
+        parsed.Make ||
+        parsed.Model ||
+        parsed.DateTimeOriginal ||
+        parsed.LensModel ||
+        parsed.ExposureTime ||
+        parsed.ISO ||
+        parsed.FNumber
+      );
+    }
+  } catch (err) {
+    console.warn('[metadata] EXIF parse failed (non-fatal):', err);
+  }
+
   return {
-    dimensions: { width: 1080, height: 1920 },
-    mimeType: "image/jpeg",
-    hasExif: false,
-    fileSize: base64Data.length * 0.75, // Rough estimate
+    dimensions,
+    mimeType,
+    hasExif,
+    filename,
+    fileSize,
+    exifData,
   };
 }
 

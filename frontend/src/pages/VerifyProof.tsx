@@ -149,12 +149,50 @@ const VerifyProof = () => {
       }
       
       const metadataStatus = analysis.metadata.hasExif ? 'original' : 'modified';
-      const compressionDetected = (analysis.forensicReport?.editedProbability || 0) > 50;
-      
-      // Calculate trust score
-      const trustScore = 100; // Simplified - you can keep original calculation if needed
-      
-      // Determine authenticity
+
+      // Phase 1: compressionDetected must reflect *compression*, not editing.
+      // The previous wiring (editedProbability > 50) conflated two unrelated
+      // detectors. Until the real WhatsApp/Downloaded detectors land (Phase 3),
+      // we use a conservative bytes-per-pixel heuristic on JPEG inputs only —
+      // a recompressed/downloaded JPEG typically drops well below 0.25 B/pixel,
+      // while a fresh camera JPEG sits between ~0.5 and ~3 B/pixel. PNGs and
+      // unknown mime types are deliberately excluded (no new false positives).
+      let compressionDetected = false;
+      try {
+        const dimsStr = (analysis.metadata?.dimensions || '').toString();
+        const [wStr, hStr] = dimsStr.split('x');
+        const w = parseInt(wStr, 10) || 0;
+        const h = parseInt(hStr, 10) || 0;
+        const pixelCount = w * h;
+        // base64 length math: 3 bytes per 4 chars (ignoring padding) — close enough
+        const fileBytes = Math.floor((selectedImage.length * 3) / 4);
+        const mime = (analysis.metadata?.mimeType || '').toLowerCase();
+        const isJpeg = mime.includes('jpeg') || mime.includes('jpg');
+        if (isJpeg && pixelCount > 0) {
+          const bpp = fileBytes / pixelCount;
+          if (bpp < 0.25) compressionDetected = true;
+        }
+      } catch (e) {
+        console.warn('[verify] compression heuristic failed (non-fatal):', e);
+      }
+
+      // Phase 1: real trust score (was hard-coded to 100). Weights are aligned
+      // with backend/routers/pinit_verification.py so frontend and backend
+      // scores stay coherent.
+      //   Watermark present .......... 30
+      //   PINIT-encrypted ............ 30
+      //   Classification confidence .. up to 20 (forensic confidence × 0.2)
+      //   EXIF integrity ............. 10
+      //   No recompression ........... 10
+      let trustScore = 0;
+      if (watermarkDetected) trustScore += 30;
+      if (pinitEncrypted) trustScore += 30;
+      trustScore += Math.round((analysis.confidence || 0) * 0.2);
+      if (analysis.metadata.hasExif) trustScore += 10;
+      if (!compressionDetected) trustScore += 10;
+      trustScore = Math.max(0, Math.min(100, trustScore));
+
+      // Determine authenticity (threshold unchanged from prior behavior)
       const isAuthentic = watermarkDetected && pinitEncrypted && trustScore >= 70;
       
       // Use forensic confidence instead of random values
