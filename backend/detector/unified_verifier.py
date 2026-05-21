@@ -256,33 +256,55 @@ class ImprovedClassificationSystem:
         
         # === PRIORITY 2: AI GENERATED DETECTION ===
         if features.get('software_ai_score', 0) > 0:
-            scores['ai_generated'] += 0.5
+            scores['ai_generated'] += 0.6
             print("[DEBUG] AI evidence: AI software detected")
         
-        if features.get('over_smoothed', 0) > 0.5:
-            scores['ai_generated'] += 0.3
+        # Lowered threshold for over-smoothed detection (0.5 -> 0.3)
+        if features.get('over_smoothed', 0) > 0.3:
+            scores['ai_generated'] += 0.4
             print("[DEBUG] AI evidence: over-smoothed regions")
         
-        if features.get('texture_repetition', 0) > 100 or features.get('texture_repetition', 0) < 10:
-            scores['ai_generated'] += 0.3
+        # Expanded texture repetition detection range
+        texture_rep = features.get('texture_repetition', 0)
+        if texture_rep > 80 or texture_rep < 15:
+            scores['ai_generated'] += 0.35
             print("[DEBUG] AI evidence: unrealistic texture patterns")
         
+        # Add high-frequency noise check (AI images often lack natural high-freq noise)
+        if features.get('high_freq_noise', 0) < 50:
+            scores['ai_generated'] += 0.25
+            print("[DEBUG] AI evidence: lack of natural high-frequency noise")
+        
+        # Add JPEG artifacts check (AI images often have uniform compression)
+        if features.get('jpeg_artifacts', 0) < 20:
+            scores['ai_generated'] += 0.2
+            print("[DEBUG] AI evidence: uniform compression patterns")
+        
         # === PRIORITY 3: CAMERA SENSOR PATTERNS ===
+        # Make camera detection more strict - require multiple indicators
         if features.get('has_exif', 0) > 0:
-            scores['camera'] += 0.3
+            scores['camera'] += 0.2
             print("[DEBUG] Camera evidence: EXIF data present")
         
-        if features.get('camera_keywords_count', 0) > 0:
-            scores['camera'] += 0.4
-            print("[DEBUG] Camera evidence: camera keywords in metadata")
+        # Require at least 2 camera keywords for stronger evidence
+        if features.get('camera_keywords_count', 0) >= 2:
+            scores['camera'] += 0.35
+            print("[DEBUG] Camera evidence: multiple camera keywords in metadata")
         
-        if features.get('sensor_noise', 0) > 2:
-            scores['camera'] += 0.3
+        # Increased threshold for sensor noise (2 -> 3)
+        if features.get('sensor_noise', 0) > 3:
+            scores['camera'] += 0.35
             print("[DEBUG] Camera evidence: natural sensor noise")
         
-        if features.get('local_variance', 0) > 100:
-            scores['camera'] += 0.2
+        # Increased threshold for local variance (100 -> 150)
+        if features.get('local_variance', 0) > 150:
+            scores['camera'] += 0.25
             print("[DEBUG] Camera evidence: natural local variance")
+        
+        # Penalty for AI indicators even if EXIF exists
+        if scores['ai_generated'] > 0.5 and features.get('has_exif', 0) > 0:
+            scores['camera'] -= 0.3
+            print("[DEBUG] Camera score reduced due to strong AI indicators")
         
         # === PRIORITY 4: DOWNLOADED/RECOMPRESSED DETECTION ===
         if not features.get('has_exif', 0) and features.get('jpeg_artifacts', 0) > 50:
