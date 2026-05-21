@@ -1,166 +1,338 @@
 /**
  * Image metadata and verification analysis
- * Detects image type, ownership, and source
+ * =========================================
+ * v2: Backend DL model is now PRIMARY classifier (70% weight).
+ * Frontend forensic heuristics are AUXILIARY (20% frequency + 10% metadata).
+ *
+ * Decision flow:
+ *   1. Extract image metadata (EXIF, mime, dimensions, fileSize)
+ *   2. Try backend /api/inference/detect-ai-base64  → DL result (3 branches)
+ *   3. Run frontend heuristics (forensicDetectionFixed.ts)
+ *   4. Fuse:  70% DL  +  20% heuristic-frequency  +  10% metadata
+ *   5. If backend unavailable → fall back to heuristic-only fusion (existing behaviour)
  */
 
-import { performForensicAnalysis, ForensicAnalysisResult as ForensicReport } from './forensicDetectionFixed';
+import {
+  performForensicAnalysis,
+  ForensicAnalysisResult as ForensicReport,
+} from './forensicDetectionFixed';
+import { runDLInference, type DLInferenceResponse } from './dlInferenceClient';
 import exifr from 'exifr';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface ImageMetadata {
   dimensions: { width: number; height: number };
-  mimeType: string;
-  hasExif: boolean;
-  filename?: string;
-  fileSize: number;
-  exifData?: any;
+  mimeType:   string;
+  hasExif:    boolean;
+  filename?:  string;
+  fileSize:   number;
+  exifData?:  unknown;
+}
+
+/** Extended forensic report — adds DL branch detail for the debug panel */
+export interface ForensicAnalysisResultExtended extends ForensicReport {
+  // DL branch probabilities (0-1 AI probability each)
+  dlResult?: {
+    cnn_score:      number;
+    residual_score: number;
+    fft_score:      number;
+    forensic_score: number;
+    metadata_score: number;
+  };
+  dlCalibration?: {
+    has_trained_weights: boolean;
+    heuristic_proxy:     boolean;
+    model_backend:       string;
+    temperature:         number;
+  };
+  dlDominantSignals?: string[];
+  dlFusionWeights?: Record<string, number>;
+  dlAvailable?: boolean;
+  dlProcessingMs?: number;
+  fusedAiProbability?: number;   // final fused AI probability (0-100 scale)
 }
 
 export interface ImageAnalysisResult {
-  imageType: "camera" | "ai" | "screenshot" | "edited" | "unknown";
-  confidence: number; // 0-100
+  imageType: 'camera' | 'ai' | 'screenshot' | 'edited' | 'unknown';
+  confidence: number;
   metadata: {
-    hasExif: boolean;
+    hasExif:    boolean;
     hasMetadata: boolean;
     dimensions?: string;
-    mimeType: string;
+    mimeType:   string;
   };
   indicators: string[];
   ownership: {
     isWatermarked: boolean;
-    owner?: string;
-    timestamp?: string;
+    owner?:        string;
+    timestamp?:    string;
   };
-  forensicReport?: ForensicReport;
+  forensicReport?: ForensicAnalysisResultExtended;
 }
 
+// ── Fusion weights (must sum to 1) ────────────────────────────────────────────
+
+const W_DL_CNN      = 0.35;  // RGB branch           ⎫
+const W_DL_RESIDUAL = 0.20;  // Noise residual branch ⎬ DL total = 70%
+const W_DL_FFT      = 0.15;  // FFT frequency branch  ⎭
+const W_FREQ        = 0.20;  // Frontend heuristic frequency signal
+const W_METADATA    = 0.10;  // EXIF / metadata reliability
+
+// When DL is unavailable — heuristic only
+const W_FALLBACK_FORENSIC = 0.75;
+const W_FALLBACK_METADATA = 0.25;
+
+// ── Main entry point ──────────────────────────────────────────────────────────
+
 /**
- * Analyze image to determine type and source
- * Uses layered forensic detection approach with trusted source priority
+ * Analyse an image and return a unified result.
+ *
+ * @param base64Data  Data URL (data:image/jpeg;base64,…)
+ * @param filename    Original filename (optional, used for EXIF hints)
+ * @param source      'camera' | 'upload' — trusted camera capture skips DL
  */
-export async function analyzeImage(base64Data: string, filename?: string, source?: 'upload' | 'camera'): Promise<ImageAnalysisResult> {
+export async function analyzeImage(
+  base64Data: string,
+  filename?:  string,
+  source?:    'upload' | 'camera',
+): Promise<ImageAnalysisResult> {
   try {
-    console.log("🔍 Analyzing image with layered forensic detection...");
+    console.log('🔍 [imageAnalysis] Starting DL-primary forensic pipeline…');
 
-    // Extract basic metadata (real dimensions, real mime, real EXIF — Phase 1)
-    const forensicMetadata: ImageMetadata = await extractImageMetadata(base64Data, filename);
-    const dimensions = forensicMetadata.dimensions;
+    // ── 1. Metadata extraction ──────────────────────────────────────────────
+    const meta = await extractImageMetadata(base64Data, filename);
+    const dims = meta.dimensions;
 
-    console.log("📊 Image metadata extracted:", {
-      dimensions: `${dimensions.width}x${dimensions.height}`,
-      hasExif: forensicMetadata.hasExif,
-      fileSize: forensicMetadata.fileSize,
-      mimeType: forensicMetadata.mimeType
+    console.log('📊 [imageAnalysis] Metadata:', {
+      dimensions: `${dims.width}×${dims.height}`,
+      hasExif:  meta.hasExif,
+      fileSize: meta.fileSize,
+      mimeType: meta.mimeType,
     });
 
-    // Run forensic analysis
-    let forensicReport: ForensicReport | undefined = undefined;
-    try {
-      forensicReport = await performForensicAnalysis(base64Data, forensicMetadata);
-      console.log("🔬 Forensic analysis completed:", forensicReport);
-    } catch (error) {
-      console.warn("⚠️ Forensic analysis failed:", error);
-      // Continue without forensic report
-    }
-
-    // Determine primary image type based on trusted source priority
-    let imageType: ImageAnalysisResult["imageType"] = "unknown";
-    let confidence = 50;
-    const indicators: string[] = [];
-
-    // PRIORITY 1: Trusted camera source override
+    // ── 2. Trusted camera source — skip inference ───────────────────────────
     if (source === 'camera') {
-      imageType = "camera";
-      confidence = 95;
-      indicators.push("📷 Trusted camera capture (in-app)");
-      console.log(`🎯 Trusted camera source detected: ${imageType} (${confidence}% confidence)`);
-    } else if (forensicReport) {
-      // PRIORITY 2: Forensic analysis for uploaded files
-      console.log("🔬 Using forensic analysis for uploaded file");
-      
-      // Use the forensic report's classification directly
-      imageType = forensicReport.imageType;
-      confidence = forensicReport.confidence;
-      
-      console.log(`🎯 Forensic classification: ${imageType} (${confidence}% confidence)`);
-    } else {
-      // Fallback to original analysis if forensic analysis failed
-      console.log("⚠️ No forensic report available, using fallback analysis");
-      // Keep unknown type
+      console.log('📷 [imageAnalysis] Trusted camera capture — skipping DL inference.');
+      return _cameraResult(meta, dims);
     }
-    
-    // Add forensic summary indicators
-    if (forensicReport && forensicReport.editedProbability > 40) {
-      indicators.push("🔧 Edited image detected");
-    }
-    if (forensicReport && forensicReport.aiProbability > 30) {
-      indicators.push(`🤖 AI probability: ${forensicReport.aiProbability}%`);
-    }
-    
-    console.log(`✅ Analysis complete: ${imageType} (${confidence}% confidence)`);
 
-    const result: ImageAnalysisResult = {
+    // ── 3. Backend DL inference (primary) ──────────────────────────────────
+    let dlResult: DLInferenceResponse | null = null;
+    try {
+      dlResult = await runDLInference(
+        base64Data,
+        filename || 'image.jpg',
+      );
+    } catch (err) {
+      console.warn('⚠️ [imageAnalysis] DL backend call threw:', err);
+    }
+
+    // ── 4. Frontend heuristic forensic analysis (auxiliary) ─────────────────
+    let forensicReport: ForensicReport | undefined;
+    try {
+      forensicReport = await performForensicAnalysis(base64Data, meta);
+      console.log('🔬 [imageAnalysis] Frontend forensic complete:', {
+        type:       forensicReport.imageType,
+        aiProb:     forensicReport.aiProbability,
+        cameraProb: forensicReport.cameraProbability,
+      });
+    } catch (err) {
+      console.warn('⚠️ [imageAnalysis] Frontend forensic failed:', err);
+    }
+
+    // ── 5. Fusion ────────────────────────────────────────────────────────────
+    const { imageType, confidence, fusedAiProb } = _fuse(
+      dlResult,
+      forensicReport,
+      meta,
+    );
+
+    // ── 6. Assemble indicators ───────────────────────────────────────────────
+    const indicators: string[] = [];
+    if (dlResult) {
+      const b = dlResult.branch_scores;
+      indicators.push(
+        `🤖 DL CNN branch: ${(b.cnn_score * 100).toFixed(0)}% AI`,
+        `🌊 DL Residual branch: ${(b.residual_score * 100).toFixed(0)}% AI`,
+        `📊 DL FFT branch: ${(b.fft_score * 100).toFixed(0)}% AI`,
+      );
+      if (dlResult.calibration.heuristic_proxy) {
+        indicators.push('ℹ️ Heuristic proxy (no trained DL checkpoint)');
+      }
+    } else {
+      indicators.push('⚠️ DL backend unavailable — frontend heuristics only');
+    }
+    if (forensicReport?.suppressionTriggered) {
+      indicators.push('🔧 AI suppression triggered');
+    }
+
+    // ── 7. Build extended forensic report ──────────────────────────────────
+    const extendedReport: ForensicAnalysisResultExtended | undefined = forensicReport
+      ? {
+          ...forensicReport,
+          ...(dlResult && {
+            dlResult: {
+              cnn_score:      dlResult.branch_scores.cnn_score,
+              residual_score: dlResult.branch_scores.residual_score,
+              fft_score:      dlResult.branch_scores.fft_score,
+              forensic_score: dlResult.branch_scores.forensic_score,
+              metadata_score: dlResult.branch_scores.metadata_score,
+            },
+            dlCalibration: {
+              has_trained_weights: dlResult.calibration.has_trained_weights,
+              heuristic_proxy:     dlResult.calibration.heuristic_proxy,
+              model_backend:       dlResult.calibration.model_backend,
+              temperature:         dlResult.calibration.temperature,
+            },
+            dlDominantSignals: dlResult.dominant_signals,
+            dlFusionWeights:   dlResult.fusion_weights,
+            dlAvailable:       dlResult.dl_available,
+            dlProcessingMs:    dlResult.processing_time_ms,
+          }),
+          fusedAiProbability: Math.round(fusedAiProb * 100),
+        }
+      : undefined;
+
+    console.log(
+      `✅ [imageAnalysis] Final: ${imageType} (${confidence}% confidence, ` +
+      `AI=${(fusedAiProb * 100).toFixed(1)}%, DL=${dlResult ? 'yes' : 'no'})`,
+    );
+
+    return {
       imageType,
       confidence,
       metadata: {
-        hasExif: forensicMetadata.hasExif,
-        hasMetadata: forensicMetadata.hasExif,
-        dimensions: `${dimensions.width}x${dimensions.height}`,
-        mimeType: forensicMetadata.mimeType
+        hasExif:     meta.hasExif,
+        hasMetadata: meta.hasExif,
+        dimensions:  `${dims.width}x${dims.height}`,
+        mimeType:    meta.mimeType,
       },
       indicators,
       ownership: {
         isWatermarked: false,
-        timestamp: new Date().toISOString(),
+        timestamp:     new Date().toISOString(),
       },
-      forensicReport
+      forensicReport: extendedReport,
     };
-    
-    console.log("✅ Analysis complete:", result);
-    return result;
-    
+
   } catch (error) {
-    console.error("Image analysis failed:", error);
-    // Return fallback result
+    console.error('[imageAnalysis] Fatal error:', error);
     return {
-      imageType: "unknown",
+      imageType:  'unknown',
       confidence: 0,
-      metadata: { 
-        hasExif: false, 
-        hasMetadata: false, 
-        dimensions: "1080x1920", 
-        mimeType: "image/jpeg" 
-      },
-      indicators: ["Error during analysis"],
-      ownership: { isWatermarked: false },
+      metadata:   { hasExif: false, hasMetadata: false, dimensions: '0x0', mimeType: 'image/jpeg' },
+      indicators: ['Error during analysis'],
+      ownership:  { isWatermarked: false },
     };
   }
 }
 
-// Helper function to extract basic image metadata
-// Phase 1: replaced the hard-coded stub with real extraction so dimensions, mime,
-// and EXIF flow correctly into the rest of the forensic pipeline. Function
-// signature is unchanged from the perspective of every existing caller
-// (filename was added as an optional parameter — defaults to undefined).
+// ── Fusion logic ──────────────────────────────────────────────────────────────
+
+function _fuse(
+  dl:        DLInferenceResponse | null,
+  forensic:  ForensicReport | undefined,
+  meta:      ImageMetadata,
+): { imageType: ImageAnalysisResult['imageType']; confidence: number; fusedAiProb: number } {
+
+  // Metadata reliability score: 0.2 if EXIF present, 0.55 if absent
+  const metadataAiScore = meta.hasExif ? 0.20 : 0.55;
+
+  if (dl) {
+    // ── DL-primary fusion ──────────────────────────────────────────────────
+    const b = dl.branch_scores;
+
+    // Heuristic frequency signal: blend server forensic_score with frontend
+    const frontendFreq = forensic
+      ? (forensic.aiProbability / 100)    // aiProbability is 0-100 in ForensicReport
+      : 0.5;
+    const freqScore = 0.50 * b.forensic_score + 0.50 * frontendFreq;
+
+    const fusedAiProb =
+      W_DL_CNN      * b.cnn_score      +
+      W_DL_RESIDUAL * b.residual_score +
+      W_DL_FFT      * b.fft_score      +
+      W_FREQ        * freqScore        +
+      W_METADATA    * metadataAiScore;
+
+    const clamped = Math.max(0, Math.min(1, fusedAiProb));
+    console.log(
+      `[Fusion] DL-primary: cnn=${b.cnn_score.toFixed(3)} ` +
+      `resid=${b.residual_score.toFixed(3)} fft=${b.fft_score.toFixed(3)} ` +
+      `freq=${freqScore.toFixed(3)} meta=${metadataAiScore.toFixed(3)} ` +
+      `→ AI=${(clamped * 100).toFixed(1)}%`,
+    );
+
+    return _classify(clamped);
+  }
+
+  // ── Heuristic-only fallback (DL backend unreachable) ─────────────────────
+  if (forensic) {
+    const forensicAiScore = forensic.aiProbability / 100;
+    const fusedAiProb =
+      W_FALLBACK_FORENSIC * forensicAiScore +
+      W_FALLBACK_METADATA * metadataAiScore;
+    const clamped = Math.max(0, Math.min(1, fusedAiProb));
+    console.log(
+      `[Fusion] Heuristic-only: forensicAI=${(forensicAiScore * 100).toFixed(1)}% ` +
+      `meta=${metadataAiScore.toFixed(3)} → AI=${(clamped * 100).toFixed(1)}%`,
+    );
+    return _classify(clamped);
+  }
+
+  // No signal at all
+  return { imageType: 'unknown', confidence: 0, fusedAiProb: 0.5 };
+}
+
+function _classify(aiProb: number): {
+  imageType:  ImageAnalysisResult['imageType'];
+  confidence: number;
+  fusedAiProb: number;
+} {
+  const AI_THRESHOLD     = 0.55;   // > 55% AI probability → classify as AI
+  const CAMERA_THRESHOLD = 0.45;   // < 45% AI probability → classify as camera
+
+  if (aiProb >= AI_THRESHOLD) {
+    return { imageType: 'ai',     confidence: Math.round(aiProb * 100), fusedAiProb: aiProb };
+  }
+  if (aiProb <= CAMERA_THRESHOLD) {
+    return { imageType: 'camera', confidence: Math.round((1 - aiProb) * 100), fusedAiProb: aiProb };
+  }
+  return { imageType: 'unknown', confidence: 0, fusedAiProb: aiProb };
+}
+
+function _cameraResult(meta: ImageMetadata, dims: { width: number; height: number }): ImageAnalysisResult {
+  return {
+    imageType:  'camera',
+    confidence: 95,
+    metadata: {
+      hasExif:     meta.hasExif,
+      hasMetadata: meta.hasExif,
+      dimensions:  `${dims.width}x${dims.height}`,
+      mimeType:    meta.mimeType,
+    },
+    indicators: ['📷 Trusted camera capture (in-app)'],
+    ownership:  { isWatermarked: false, timestamp: new Date().toISOString() },
+  };
+}
+
+// ── Metadata extraction ───────────────────────────────────────────────────────
+
 async function extractImageMetadata(
   base64Data: string,
-  filename?: string
+  filename?:  string,
 ): Promise<ImageMetadata> {
-  // 1. Real dimensions (browser-only; safe fallback to 0×0 for SSR/test envs)
+  // Dimensions
   let dimensions = { width: 0, height: 0 };
-  try {
-    dimensions = await getImageDimensions(base64Data);
-  } catch (err) {
-    console.warn('[metadata] dimension extraction failed:', err);
-  }
+  try { dimensions = await getImageDimensions(base64Data); } catch { /* ignore */ }
 
-  // 2. Real mime type from the data URL header (defaults to image/jpeg if absent)
+  // MIME type
   let mimeType = 'image/jpeg';
   const mimeMatch = /^data:([^;]+);base64,/i.exec(base64Data);
-  if (mimeMatch && mimeMatch[1]) {
-    mimeType = mimeMatch[1].toLowerCase();
-  }
+  if (mimeMatch?.[1]) mimeType = mimeMatch[1].toLowerCase();
 
-  // 3. Real byte size — base64 encodes 3 bytes per 4 chars, minus padding
+  // File size
   let fileSize = 0;
   try {
     const commaIdx = base64Data.indexOf(',');
@@ -168,255 +340,90 @@ async function extractImageMetadata(
     const padding = (b64.match(/=+$/) || [''])[0].length;
     fileSize = Math.max(0, Math.floor((b64.length * 3) / 4) - padding);
   } catch {
-    fileSize = base64Data.length * 0.75; // legacy fallback
+    fileSize = base64Data.length * 0.75;
   }
 
-  // 4. Real EXIF via exifr (no-op for PNGs and EXIF-stripped JPEGs)
-  let exifData: any = undefined;
+  // EXIF
+  let exifData: unknown = undefined;
   let hasExif = false;
   try {
-    // exifr accepts data URLs directly. silent:true so it doesn't throw on
-    // images without EXIF (most PNGs, screenshots, AI-generated, re-uploads).
     const parsed = await exifr.parse(base64Data, {
-      tiff: true,
-      ifd0: true,
-      exif: true,
-      gps: false,
-      interop: false,
-      makerNote: false,
-      userComment: false,
+      tiff: true, ifd0: true, exif: true,
+      gps: false, interop: false, makerNote: false, userComment: false,
       silentErrors: true,
-    } as any);
+    } as Parameters<typeof exifr.parse>[1]);
     if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
       exifData = parsed;
-      // Treat as "has EXIF" only if camera-meaningful fields are present.
-      // This prevents an empty/near-empty EXIF block from masquerading as a
-      // real camera capture (a common pattern in editor re-saves).
       hasExif = Boolean(
-        parsed.Make ||
-        parsed.Model ||
-        parsed.DateTimeOriginal ||
-        parsed.LensModel ||
-        parsed.ExposureTime ||
-        parsed.ISO ||
-        parsed.FNumber
+        (parsed as Record<string, unknown>).Make           ||
+        (parsed as Record<string, unknown>).Model          ||
+        (parsed as Record<string, unknown>).DateTimeOriginal ||
+        (parsed as Record<string, unknown>).ExposureTime   ||
+        (parsed as Record<string, unknown>).ISO            ||
+        (parsed as Record<string, unknown>).FNumber,
       );
     }
-  } catch (err) {
-    console.warn('[metadata] EXIF parse failed (non-fatal):', err);
-  }
+  } catch { /* non-fatal */ }
 
-  return {
-    dimensions,
-    mimeType,
-    hasExif,
-    filename,
-    fileSize,
-    exifData,
-  };
+  return { dimensions, mimeType, hasExif, filename, fileSize, exifData };
 }
 
-/**
- * Get image dimensions from base64 data
- */
 function getImageDimensions(base64Data: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => {
-      resolve({
-        width: img.naturalWidth,
-        height: img.naturalHeight,
-      });
-    };
-    img.onerror = () => {
-      // Default dimensions on error
-      resolve({ width: 1080, height: 1920 });
-    };
-    img.src = base64Data.startsWith("data:") ? base64Data : `data:image/jpeg;base64,${base64Data}`;
+    img.onload  = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    img.onerror = () => resolve({ width: 1080, height: 1920 });
+    img.src = base64Data.startsWith('data:') ? base64Data : `data:image/jpeg;base64,${base64Data}`;
   });
 }
 
-/**
- * Detect AI-generated image characteristics
- * Scores 0-100 based on AI likelihood
- */
-async function detectAIGenerated(base64Data: string): Promise<number> {
-  // This is a simulated AI detection
-  // In production, you'd use ML models like:
-  // - CLIP for semantic analysis
-  // - Frequency domain analysis for GAN artifacts
-  // - Texture analysis
+// ── Display helper ────────────────────────────────────────────────────────────
 
-  try {
-    console.log("🤖 Starting AI detection analysis...");
-    
-    // Check if Image constructor is available
-    if (typeof Image === 'undefined') {
-      console.warn("⚠️ Image constructor not available");
-      return 0;
-    }
-    
-    const img = new Image();
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("AI detection image loading timeout"));
-      }, 5000);
-      
-      img.onload = () => {
-        clearTimeout(timeout);
-        resolve(img);
-      };
-      
-      img.onerror = () => {
-        clearTimeout(timeout);
-        reject(new Error("Failed to load image for AI detection"));
-      };
-      
-      img.src = base64Data.startsWith("data:") ? base64Data : `data:image/jpeg;base64,${base64Data}`;
-    });
-
-    // Check if document and canvas are available
-    if (typeof document === 'undefined' || typeof document.createElement === 'undefined') {
-      console.warn("⚠️ Document or canvas not available for AI detection");
-      return 0;
-    }
-    
-    const canvas = document.createElement("canvas");
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      console.warn("⚠️ Could not get canvas context for AI detection");
-      return 0;
-    }
-
-    ctx.drawImage(img, 0, 0);
-    const imageData = ctx.getImageData(0, 0, 10, 10);
-    const data = imageData.data;
-
-    console.log("🎨 Canvas analysis complete, checking AI characteristics...");
-
-    // Check for AI characteristics:
-    // 1. Unusual color distribution
-    // 2. Watermarked artifacts
-    // 3. Frequency patterns
-
-    let score = 0;
-
-    // Analyze pixel diversity (AI images often have less natural randomness)
-    const colors = new Set();
-    for (let i = 0; i < data.length; i += 4) {
-      colors.add(`${data[i]},${data[i + 1]},${data[i + 2]}`);
-    }
-    if (colors.size < 15) score += 20; // Low diversity suggests AI
-
-    // Random score based on simulation
-    // In production, use actual ML models
-    score += Math.random() * 40;
-
-    return Math.min(100, score);
-  } catch (error) {
-    console.warn("⚠️ AI detection error:", error);
-    return 0;
-  }
-}
-
-/**
- * Detect whitespace characteristics (WhatsApp, etc.)
- */
-function detectedWhatsApp(dimensions: { width: number; height: number }): boolean {
-  // WhatsApp uses specific compression and often crops to certain aspect ratios
-  const aspectRatio = dimensions.width / dimensions.height;
-  
-  // Common WhatsApp aspect ratios
-  return (
-    (aspectRatio > 0.5 && aspectRatio < 0.6) || // Typical story format
-    (aspectRatio > 1.4 && aspectRatio < 1.6)    // Typical landscape
-  );
-}
-
-/**
- * Detect screenshot characteristics
- */
-function detectedScreenshot(dimensions: { width: number; height: number }): boolean {
-  // Common screenshot dimensions
-  const commonWidths = [1080, 1440, 720, 540, 1024, 768, 800];
-  return commonWidths.includes(dimensions.width);
-}
-
-/**
- * Format analysis result for display
- * Includes forensic details if available
- */
 export function formatAnalysisResult(result: ImageAnalysisResult): string {
-  const typeEmoji: Record<ImageAnalysisResult["imageType"], string> = {
-    camera: "📷",
-    ai: "🤖",
-    screenshot: "📸",
-    edited: "🔧",
-    unknown: "❓",
+  const typeEmoji: Record<ImageAnalysisResult['imageType'], string> = {
+    camera: '📷', ai: '🤖', screenshot: '📸', edited: '🔧', unknown: '❓',
   };
+  const fr = result.forensicReport as ForensicAnalysisResultExtended | undefined;
 
-  let output = `
+  let out = `
 ${typeEmoji[result.imageType]} IMAGE TYPE: ${result.imageType.toUpperCase()}
 📊 Confidence: ${result.confidence}%
 
 📋 INDICATORS:
-${result.indicators.map((ind) => `  • ${ind}`).join("\n")}
+${result.indicators.map((i) => `  • ${i}`).join('\n')}
 
 📋 METADATA:
-  • EXIF Data: ${result.metadata.hasExif ? "Present" : "Not found"}
-  • Image Dimension: ${result.metadata.dimensions}
+  • EXIF Data: ${result.metadata.hasExif ? 'Present' : 'Not found'}
+  • Dimensions: ${result.metadata.dimensions}
   • Format: ${result.metadata.mimeType}
 
 🔒 OWNERSHIP:
-  • Watermarked: ${result.ownership.isWatermarked ? "Yes ✓" : "No"}
-  • Timestamp: ${result.ownership.timestamp}
-  ${result.ownership.owner ? `• Owner: ${result.ownership.owner}` : ""}`;
+  • Watermarked: ${result.ownership.isWatermarked ? 'Yes ✓' : 'No'}
+  • Timestamp: ${result.ownership.timestamp}`;
 
-  // Add forensic details if available
-  if (result.forensicReport) {
-    const fr = result.forensicReport;
-    output += `
+  if (fr?.dlResult) {
+    const b = fr.dlResult;
+    out += `
 
-🔬 FORENSIC ANALYSIS:
-  📸 Screenshot: ${fr.screenshotProbability > 50 ? `YES (${fr.screenshotProbability}%)` : 'NO'}
-  💬 WhatsApp: ${fr.whatsappProbability > 45 ? `YES (${fr.whatsappProbability}%)` : 'NO'}
-  🌐 Downloaded: ${fr.downloadedProbability > 40 ? `YES (${fr.downloadedProbability}%)` : 'NO'}
-  🤖 AI Generated: ${fr.aiProbability}%
-  📷 Camera Original: ${fr.cameraProbability > 35 ? `YES (${fr.cameraProbability}%)` : 'NO'}`;
-
-    // Add detailed analysis summary
-    if (fr.screenshotProbability > 50) {
-      output += `
-
-📸 SCREENSHOT DETECTED: High confidence screenshot analysis`;
-    }
-
-    if (fr.whatsappProbability > 45) {
-      output += `
-
-💬 WHATSAPP DETECTED: WhatsApp compression signatures found`;
-    }
-
-    if (fr.downloadedProbability > 40) {
-      output += `
-
-🌐 DOWNLOAD DETECTED: Multiple re-encoding artifacts detected`;
-    }
-
-    if (fr.aiProbability > 30) {
-      output += `
-
-🤖 AI DETECTED: AI generation signatures found`;
-    }
-
-    if (fr.cameraProbability > 35) {
-      output += `
-
-📷 CAMERA DETECTED: Authentic camera characteristics`;
-    }
+🧠 DL INFERENCE (${fr.dlCalibration?.model_backend ?? 'unknown'}):
+  📷 CNN branch:      ${(b.cnn_score * 100).toFixed(1)}% AI
+  🌊 Residual branch: ${(b.residual_score * 100).toFixed(1)}% AI
+  📊 FFT branch:      ${(b.fft_score * 100).toFixed(1)}% AI
+  🔧 Frequency score: ${(b.forensic_score * 100).toFixed(1)}% AI
+  📂 Metadata score:  ${(b.metadata_score * 100).toFixed(1)}% AI
+  ═══════════════════════════════
+  🎯 Fused AI prob:   ${fr.fusedAiProbability ?? '?'}%
+  ℹ️  Trained weights: ${fr.dlCalibration?.has_trained_weights ? 'Yes' : 'No (heuristic proxy)'}`;
   }
 
-  return output.trim();
+  if (fr) {
+    out += `
+
+🔬 FORENSIC ANALYSIS:
+  📸 Screenshot:      ${fr.screenshotProbability > 50 ? `YES (${fr.screenshotProbability}%)` : 'NO'}
+  🤖 AI Generated:    ${fr.aiProbability}%
+  📷 Camera Original: ${fr.cameraProbability > 35 ? `YES (${fr.cameraProbability}%)` : 'NO'}`;
+  }
+
+  return out.trim();
 }
