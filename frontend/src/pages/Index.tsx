@@ -87,8 +87,8 @@ const Index = () => {
               <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center mb-4">
                 <Shield className="w-6 h-6 text-white" />
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Biometric Security</h3>
-              <p className="text-sm text-muted-foreground">Advanced fingerprint and facial recognition technology</p>
+              <h3 className="text-lg font-semibold text-foreground mb-2">AI Forensic Detection</h3>
+              <p className="text-sm text-muted-foreground">Advanced AI-generated image detection and document forensics</p>
             </div>
             
             <div className="bg-background/50 backdrop-blur-sm border border-border/50 rounded-lg p-6">

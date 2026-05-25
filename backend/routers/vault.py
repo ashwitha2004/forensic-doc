@@ -9,6 +9,83 @@ import uuid
 
 router = APIRouter(tags=["Vault"])
 
+# ── Upload security constants ─────────────────────────────────────────────────
+# Explicit allowlist — anything not in this set is rejected.
+_ALLOWED_MIME_TYPES: set[str] = {
+    # Images
+    "image/jpeg", "image/png", "image/webp", "image/tiff", "image/bmp", "image/gif",
+    # Documents
+    "application/pdf",
+    "application/msword",                                                          # .doc
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",    # .docx
+    "text/plain",
+    # Browsers sometimes send this for binary files — we validate extension too
+    "application/octet-stream",
+}
+
+_ALLOWED_EXTENSIONS: set[str] = {
+    "jpg", "jpeg", "png", "webp", "tiff", "tif", "bmp", "gif",
+    "pdf", "doc", "docx", "txt",
+}
+
+# Explicitly blocked — executable / script types
+_BLOCKED_EXTENSIONS: set[str] = {
+    "exe", "dll", "bat", "cmd", "com", "sh", "bash", "py", "pyc",
+    "js", "ts", "jsx", "tsx", "php", "rb", "pl", "ps1", "psm1",
+    "vbs", "vba", "msi", "jar", "apk", "ipa", "so", "dylib",
+    "bin", "run", "out", "elf",
+}
+
+# Content-type map used by the asset download endpoint
+_CONTENT_TYPE_MAP: dict[str, str] = {
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png":  "image/png",
+    ".webp": "image/webp",
+    ".gif":  "image/gif",
+    ".tiff": "image/tiff",
+    ".tif":  "image/tiff",
+    ".bmp":  "image/bmp",
+    ".pdf":  "application/pdf",
+    ".doc":  "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".txt":  "text/plain",
+}
+
+
+def _validate_upload(filename: str, content_type: str | None, size_bytes: int) -> None:
+    """
+    Raise HTTPException for any upload that fails security checks.
+    Called before any data is written to the database.
+    """
+    if size_bytes == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    # --- Extension check ---
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if ext in _BLOCKED_EXTENSIONS:
+        raise HTTPException(
+            status_code=415,
+            detail=f"File type '.{ext}' is not permitted for security reasons.",
+        )
+
+    # For application/octet-stream (browser fallback) we rely solely on extension
+    effective_mime = content_type or "application/octet-stream"
+    if effective_mime == "application/octet-stream":
+        if ext not in _ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=415,
+                detail=f"Unsupported file extension '.{ext}'. "
+                       "Allowed: jpg, png, webp, tiff, bmp, pdf, doc, docx, txt.",
+            )
+    elif effective_mime not in _ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file type '{effective_mime}'. "
+                   "Allowed types: images (JPG/PNG/WEBP/TIFF/BMP), PDF, DOC, DOCX, TXT.",
+        )
+
 
 @router.post("/save")
 async def save_vault_image(
@@ -344,20 +421,12 @@ async def download_vault_image(asset_id: str, user_id: str = None):
             print(f"❌ Base64 decode failed: {str(decode_err)}")
             raise HTTPException(status_code=500, detail=f"Failed to decode image: {str(decode_err)}")
         
-        # Detect format from filename
-        content_type = "image/jpeg"
-        file_format = "jpg"
-        if ".png" in file_name.lower():
-            content_type = "image/png"
-            file_format = "png"
-        elif ".webp" in file_name.lower():
-            content_type = "image/webp"
-            file_format = "webp"
-        elif ".gif" in file_name.lower():
-            content_type = "image/gif"
-            file_format = "gif"
-        
-        print(f"✅ Sending original image: {file_name} ({content_type}), size: {len(image_bytes)} bytes")
+        # Detect content-type from filename extension (covers images + documents)
+        import os as _os
+        _ext = _os.path.splitext(file_name.lower())[1]   # e.g. ".pdf", ".docx"
+        content_type = _CONTENT_TYPE_MAP.get(_ext, "application/octet-stream")
+
+        print(f"✅ Sending file: {file_name} ({content_type}), size: {len(image_bytes)} bytes")
         
         return StreamingResponse(
             iter([image_bytes]),
@@ -588,10 +657,11 @@ async def upload_document(
         # Read file
         contents = await file.read()
         file_size_mb = len(contents) / (1024 * 1024)
-        
-        # Validate size (50MB max)
+
+        # Security validation — MIME type, extension, and size
         if file_size_mb > 50:
             raise HTTPException(status_code=400, detail="File too large (max 50MB)")
+        _validate_upload(file.filename or "upload", file.content_type, len(contents))
         
         import uuid
         from datetime import datetime

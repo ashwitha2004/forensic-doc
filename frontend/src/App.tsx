@@ -14,6 +14,8 @@ import Encrypt from "./pages/Encrypt";
 import VerifyProof from "./pages/VerifyProof.tsx";
 import DetectionResult from "./pages/DetectionResult";
 import AIDetectionTest from "./pages/AIDetectionTest";
+import DocumentForensics from "./pages/DocumentForensics";
+import UnifiedForensics from "./pages/UnifiedForensics";
 
 // ===================== GLOBAL ERROR BOUNDARY =====================
 class ErrorBoundary extends Component<
@@ -220,6 +222,22 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <AIDetectionTest />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/document-forensics"
+              element={
+                <ProtectedRoute>
+                  <DocumentForensics />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/unified-forensics"
+              element={
+                <ProtectedRoute>
+                  <UnifiedForensics />
                 </ProtectedRoute>
               }
             />

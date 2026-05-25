@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { HexGrid } from '@/components/HexGrid';
 import { Button } from '@/components/ui/button';
-import { Shield, Upload, FileText, LogOut, User } from 'lucide-react';
+import { Shield, Upload, FileText, LogOut, Microscope, User, Layers } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { appStorage } from '@/lib/storage';
 
@@ -109,7 +109,7 @@ const Home = () => {
           </motion.div>
 
           {/* Action Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12 lg:grid-cols-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -150,6 +150,50 @@ const Home = () => {
                 className="w-full border-purple-500/50 text-purple-400 hover:bg-purple-500/10"
               >
                 Verify Proof
+              </Button>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.4, duration: 0.6 }}
+              className="bg-background/80 backdrop-blur-xl border border-border/50 rounded-xl p-6 hover:border-violet-500/50 transition-colors"
+            >
+              <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center mb-4">
+                <Microscope className="w-6 h-6 text-white" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground mb-2">Document Forensics</h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                Detect forgery and tampering in documents using ELA heatmaps, noise analysis, and OCR comparison
+              </p>
+              <Button
+                onClick={() => navigate('/document-forensics')}
+                variant="outline"
+                className="w-full border-violet-500/50 text-violet-400 hover:bg-violet-500/10"
+              >
+                Analyze Document
+              </Button>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.5, duration: 0.6 }}
+              className="bg-background/80 backdrop-blur-xl border border-border/50 rounded-xl p-6 hover:border-emerald-500/50 transition-colors"
+            >
+              <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center mb-4">
+                <Layers className="w-6 h-6 text-white" />
+              </div>
+              <h3 className="text-lg font-semibold text-foreground mb-2">Unified Forensics</h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                AI detection fused with document forensics for a single comprehensive authenticity verdict
+              </p>
+              <Button
+                onClick={() => navigate('/unified-forensics')}
+                variant="outline"
+                className="w-full border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10"
+              >
+                Run Unified Analysis
               </Button>
             </motion.div>
           </div>

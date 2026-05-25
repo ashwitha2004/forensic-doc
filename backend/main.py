@@ -13,6 +13,8 @@ load_dotenv(env_path)
 from routers import auth, vault, pinit_verification
 from forensic import forensic_router
 from inference import inference_router
+from document_forensics import document_forensics_router
+from unified_forensics import unified_forensics_router
 
 app = FastAPI(
     title       = "PINIT API",
@@ -20,35 +22,54 @@ app = FastAPI(
     version     = "1.0.0"
 )
 
-# CORS — allow React frontend and Capacitor mobile app to call this backend
+# ---------------------------------------------------------------------------
+# CORS — allow React frontend (local + Vercel) and Capacitor mobile app.
+#
+# Rules:
+#  • allow_origins      — exact-match list (local dev + known Vercel URL).
+#  • allow_origin_regex — covers ALL *.vercel.app preview/branch deploys and
+#                         any Render self-hosted frontend without listing them
+#                         individually.  Starlette compiles this into a single
+#                         re.Pattern and checks it against the Origin header.
+#  • allow_credentials  — True so the browser sends cookies/auth headers.
+#  • NOTE: "https://*.vercel.app" and bare "*" are NOT valid in allow_origins
+#    when credentials=True (Starlette ignores them silently).  Use regex instead.
+# ---------------------------------------------------------------------------
+_VERCEL_DOMAIN = os.environ.get("VITE_FRONTEND_URL", "https://pinit-vault-frontend.vercel.app")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         # Local development
-        "http://localhost:8082",
-        "http://localhost:5173",
-        "http://127.0.0.1:8082",
-        "http://127.0.0.1:5173",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
         "http://localhost:3000",
-        "http://127.0.0.1:3000",
         "http://localhost:5000",
-        "http://127.0.0.1:5000",
+        "http://localhost:5173",
         "http://localhost:8000",
+        "http://localhost:8080",
+        "http://localhost:8082",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5000",
+        "http://127.0.0.1:5173",
         "http://127.0.0.1:8000",
-        # Production Vercel (will be updated with actual domain)
-        "https://pinit-vault-frontend.vercel.app",
-        "https://*.vercel.app",
-        # Mobile apps
-        "capacitor://",
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:8082",
+        # Known production Vercel URL (env-configurable)
+        _VERCEL_DOMAIN,
+        # Capacitor / Ionic mobile
+        "capacitor://localhost",
+        "ionic://localhost",
         "file://",
-        # Fallback for development
-        "*"
     ],
+    # Regex covers every *.vercel.app preview deploy and *.onrender.com frontends.
+    allow_origin_regex=(
+        r"https://[a-zA-Z0-9\-]+\.vercel\.app"
+        r"|https://[a-zA-Z0-9\-]+\.onrender\.com"
+    ),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["*"],
+    expose_headers=["X-Process-Time", "X-Backend-Version"],
+    max_age=600,   # cache preflight for 10 min — reduces OPTIONS round-trips
 )
 
 # Register core routers for PINIT verification system
@@ -61,6 +82,12 @@ app.include_router(forensic_router)
 
 # Register hybrid DL + forensic inference router
 app.include_router(inference_router)
+
+# Register document forensics router
+app.include_router(document_forensics_router)
+
+# Register unified forensics router (AI + document forensics fused)
+app.include_router(unified_forensics_router)
 
 # ════════════════════════════════════════════════════════════════
 # CORE PINIT VERIFICATION SYSTEM - Lightweight and focused

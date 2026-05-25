@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-05-22T05:56:24.914340+00:00",
+  "dry_run": false,
+  "subfolders": {
+    "ai": {
+      "label": "ai",
+      "scanned": 0,
+      "copied": 0,
+      "skipped_duplicate": 0,
+      "skipped_unreviewed": 0,
+      "errors": 0,
+      "copied_files": []
+    },
+    "real": {
+      "label": "real",
+      "scanned": 1,
+      "copied": 1,
+      "skipped_duplicate": 0,
+      "skipped_unreviewed": 0,
+      "errors": 0,
+      "copied_files": [
+        "failure_real_20260522_08500.jpeg"
+      ]
+    }
+  },
+  "totals": {
+    "scanned": 1,
+    "copied": 1,
+    "skipped_duplicate": 0,
+    "skipped_unreviewed": 0,
+    "errors": 0
+  },
+  "dataset_before": {
+    "real": 8500,
+    "ai": 7458
+  },
+  "dataset_after": {
+    "real": 8501,
+    "ai": 7458
+  },
+  "dataset_delta": {
+    "real": 1,
+    "ai": 0
+  }
+}

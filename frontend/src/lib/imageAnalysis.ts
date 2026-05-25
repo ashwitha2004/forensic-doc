@@ -299,7 +299,26 @@ function _classify(aiProb: number): {
   if (aiProb <= CAMERA_THRESHOLD) {
     return { imageType: 'camera', confidence: Math.round((1 - aiProb) * 100), fusedAiProb: aiProb };
   }
-  return { imageType: 'unknown', confidence: 0, fusedAiProb: aiProb };
+
+  // In the uncertainty zone (45–55%), lean toward the closer threshold
+  // rather than defaulting to 'unknown' with 0% confidence.
+  const distanceFromAI     = AI_THRESHOLD     - aiProb;   // how far below AI threshold
+  const distanceFromCamera = aiProb - CAMERA_THRESHOLD;   // how far above camera threshold
+
+  if (distanceFromCamera < distanceFromAI) {
+    // Closer to camera threshold → classify as camera with reduced confidence
+    return {
+      imageType:   'camera',
+      confidence:  Math.round((1 - aiProb) * 100 * 0.8),
+      fusedAiProb: aiProb,
+    };
+  }
+  // Closer to AI threshold → classify as AI with reduced confidence
+  return {
+    imageType:   'ai',
+    confidence:  Math.round(aiProb * 100 * 0.8),
+    fusedAiProb: aiProb,
+  };
 }
 
 function _cameraResult(meta: ImageMetadata, dims: { width: number; height: number }): ImageAnalysisResult {
@@ -351,15 +370,15 @@ async function extractImageMetadata(
       tiff: true, ifd0: true, exif: true,
       gps: false, interop: false, makerNote: false, userComment: false,
       silentErrors: true,
-    } as Parameters<typeof exifr.parse>[1]);
+    } as any);
     if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
       exifData = parsed;
       hasExif = Boolean(
-        (parsed as Record<string, unknown>).Make           ||
-        (parsed as Record<string, unknown>).Model          ||
+        (parsed as Record<string, unknown>).Make             ||
+        (parsed as Record<string, unknown>).Model            ||
         (parsed as Record<string, unknown>).DateTimeOriginal ||
-        (parsed as Record<string, unknown>).ExposureTime   ||
-        (parsed as Record<string, unknown>).ISO            ||
+        (parsed as Record<string, unknown>).ExposureTime     ||
+        (parsed as Record<string, unknown>).ISO              ||
         (parsed as Record<string, unknown>).FNumber,
       );
     }

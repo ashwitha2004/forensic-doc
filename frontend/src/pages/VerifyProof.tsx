@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { extractAdvancedWatermark, type AdvancedWatermarkMetadata } from "@/lib/advancedSteganography";
 import { extractSimpleWatermark, type SimpleWatermarkMetadata } from "@/lib/simpleSteganography";
 import { analyzeImage, type ImageAnalysisResult } from "@/lib/imageAnalysis";
-import { getAIDetection, type IntegratedDetectionResult } from "@/utils/aiDetection/aiDetectionIntegration";
 import { CameraCapture } from "@/components/CameraCapture";
 
 interface VerificationResult {
@@ -153,18 +152,8 @@ const VerifyProof = () => {
       // Perform comprehensive forensic analysis
       const analysis = await analyzeImage(selectedImage, selectedFileName || undefined, captureSource || undefined);
       
-      // Use AI detection system
-      let aiDetectionResult: IntegratedDetectionResult | null = null;
-      let aiProbability = 0;
-      
-      try {
-        const aiDetector = getAIDetection();
-        aiDetectionResult = await aiDetector.analyzeImage(selectedImage);
-        aiProbability = aiDetectionResult.confidence * 100;
-      } catch (error) {
-        console.warn('AI detection failed, falling back to forensic analysis:', error);
-        aiProbability = analysis.forensicReport?.aiProbability || 0;
-      }
+      // Use forensic report's AI probability directly
+      const aiProbability = analysis.forensicReport?.aiProbability || 0;
       
       const metadataStatus = analysis.metadata.hasExif ? 'original' : 'modified';
 
@@ -225,9 +214,7 @@ const VerifyProof = () => {
         issues.push('Watermark found but not PINIT encrypted');
       }
       
-      if (aiDetectionResult && aiDetectionResult.aiGenerated) {
-        issues.push(`AI-generated content detected (${aiProbability.toFixed(1)}% confidence)`);
-      } else if (aiProbability > 50) {
+      if (aiProbability > 50) {
         issues.push(`AI-generated content detected (${aiProbability.toFixed(1)}% probability)`);
       }
       
