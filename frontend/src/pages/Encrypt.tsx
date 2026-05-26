@@ -162,7 +162,8 @@ const Encrypt = () => {
     try {
       const realUserId =
         localStorage.getItem("pinit_user_id") ||
-        localStorage.getItem("biovault_user_id") ||
+        localStorage.getItem("biovault_userId") ||      // camelCase — written by auth/logout
+        localStorage.getItem("biovault_user_id") ||    // underscore — legacy
         "USR-UNKNOWN";
 
       console.log("[ENCRYPT] Logged in user:", realUserId);
@@ -244,20 +245,29 @@ const Encrypt = () => {
     setEncryptionResult(null);
 
     try {
+      // Check all known key variants so we match whatever the auth module stored
       const realUserId =
         localStorage.getItem("pinit_user_id") ||
-        localStorage.getItem("biovault_user_id") ||
+        localStorage.getItem("biovault_userId") ||      // camelCase — used by auth/logout
+        localStorage.getItem("biovault_user_id") ||    // underscore — legacy key
         "USR-UNKNOWN";
 
-      console.log("[ENCRYPT] Document upload — user:", realUserId, "file:", selectedFile.name);
+      console.log("[ENCRYPT] Document upload — user:", realUserId, "file:", selectedFile.name,
+                  "mime:", selectedFile.type, "size:", (selectedFile.size / 1024).toFixed(0) + " KB");
 
       const form = new FormData();
-      form.append("file", selectedFile);
+      form.append("file", selectedFile, selectedFile.name);   // explicit filename for MIME detection
       form.append("user_id", realUserId);
+
+      // Debug: list every key being sent so we can confirm user_id is present
+      console.log("[ENCRYPT] FormData keys:", [...form.keys()]);
+      console.log("[ENCRYPT] FormData user_id value:", form.get("user_id"));
 
       const res = await fetch(`${BACKEND_URL}/vault/upload`, {
         method: "POST",
         body: form,
+        // ⚠️ Do NOT set Content-Type here — the browser must set the multipart
+        // boundary automatically, otherwise the server can't parse form fields.
       });
 
       if (!res.ok) {

@@ -11,11 +11,7 @@ import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Home from "./pages/Home";
 import Encrypt from "./pages/Encrypt";
-import VerifyProof from "./pages/VerifyProof.tsx";
-import DetectionResult from "./pages/DetectionResult";
-import AIDetectionTest from "./pages/AIDetectionTest";
 import DocumentForensics from "./pages/DocumentForensics";
-import UnifiedForensics from "./pages/UnifiedForensics";
 
 // ===================== GLOBAL ERROR BOUNDARY =====================
 class ErrorBoundary extends Component<
@@ -202,30 +198,6 @@ const App = () => (
               }
             />
             <Route
-              path="/verify-proof"
-              element={
-                <ProtectedRoute>
-                  <VerifyProof />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/detection-result"
-              element={
-                <ProtectedRoute>
-                  <DetectionResult />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/ai-detection-test"
-              element={
-                <ProtectedRoute>
-                  <AIDetectionTest />
-                </ProtectedRoute>
-              }
-            />
-            <Route
               path="/document-forensics"
               element={
                 <ProtectedRoute>
@@ -233,14 +205,11 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            <Route
-              path="/unified-forensics"
-              element={
-                <ProtectedRoute>
-                  <UnifiedForensics />
-                </ProtectedRoute>
-              }
-            />
+            {/* Legacy redirects — old routes point to the unified engine */}
+            <Route path="/verify-proof"      element={<ProtectedRoute><DocumentForensics /></ProtectedRoute>} />
+            <Route path="/unified-forensics" element={<ProtectedRoute><DocumentForensics /></ProtectedRoute>} />
+            <Route path="/detection-result"  element={<ProtectedRoute><DocumentForensics /></ProtectedRoute>} />
+            <Route path="/ai-detection-test" element={<ProtectedRoute><DocumentForensics /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

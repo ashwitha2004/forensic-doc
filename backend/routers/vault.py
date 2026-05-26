@@ -276,10 +276,20 @@ async def save_vault_image(
         return {"message": "Saved to vault", "data": record.data[0]}
         
     except Exception as e:
-        print(f"❌ Vault Save: Database insert failed - {str(e)}")
+        err_str = str(e)
+        print(f"❌ Vault Save: Database insert failed - {err_str}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to save to vault: {str(e)}")
+        if "getaddrinfo" in err_str or "11001" in err_str:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Database unreachable: the Supabase project cannot be found. "
+                    "Please log in to supabase.com and resume or recreate the project, "
+                    "then update SUPABASE_URL / SUPABASE_SERVICE_KEY in backend/.env."
+                ),
+            )
+        raise HTTPException(status_code=500, detail=f"Failed to save to vault: {err_str}")
 
 
 @router.get("/list")
@@ -636,21 +646,27 @@ async def save_scanned_document(
 
 @router.post("/upload")
 async def upload_document(
-    file: UploadFile = None,
-    user_id: str = None,
-    doc_name: str = "",
-    request: Request = None
+    file: UploadFile = File(...),
+    user_id: str = Form(None),    # Must be Form() — plain str skips multipart body
+    doc_name: str = Form(""),
+    request: Request = None,
 ):
     """
     Upload a document file from user's device.
     Supports: PDF, DOCX, XLSX, Images (max 50MB)
     """
     db = get_admin_db()
-    
+
+    # ── Debug: log every received field so failures are easy to trace ─────────
+    print(f"[VaultUpload] file={file.filename if file else None} "
+          f"content_type={file.content_type if file else None} "
+          f"user_id={user_id!r} doc_name={doc_name!r}")
+
     try:
         if not user_id:
+            print("[VaultUpload] ❌ user_id is missing or empty")
             raise HTTPException(status_code=400, detail="user_id required")
-        
+
         if not file or not file.filename:
             raise HTTPException(status_code=400, detail="File required")
         
@@ -662,6 +678,10 @@ async def upload_document(
         if file_size_mb > 50:
             raise HTTPException(status_code=400, detail="File too large (max 50MB)")
         _validate_upload(file.filename or "upload", file.content_type, len(contents))
+
+        print(f"[VaultUpload] ✅ validation passed — "
+              f"user={user_id} file={file.filename} "
+              f"mime={file.content_type} size={file_size_mb:.2f}MB")
         
         import uuid
         from datetime import datetime
@@ -724,8 +744,20 @@ async def upload_document(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Upload Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        err_str = str(e)
+        print(f"❌ Upload Error: {err_str}")
+        # Detect DNS / connectivity failures and surface a human-readable message
+        if "getaddrinfo" in err_str or "Name or service not known" in err_str or "11001" in err_str:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Database unreachable: the Supabase project cannot be found. "
+                    "The project may have been paused or deleted on the free tier. "
+                    "Please log in to supabase.com, resume or recreate the project, "
+                    "and update SUPABASE_URL / SUPABASE_SERVICE_KEY in backend/.env."
+                ),
+            )
+        raise HTTPException(status_code=500, detail=f"Upload failed: {err_str}")
 
 
 @router.get("/documents/user/{user_id}")
