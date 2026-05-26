@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { HexGrid } from '@/components/HexGrid';
 import { Button } from '@/components/ui/button';
-import { Shield, Upload, FileText, LogOut, User } from 'lucide-react';
+import { Shield, Upload, LogOut, Microscope, User } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { appStorage } from '@/lib/storage';
 
@@ -108,48 +108,61 @@ const Home = () => {
             </p>
           </motion.div>
 
-          {/* Action Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
+          {/* Action Cards — two primary capabilities */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12 max-w-3xl mx-auto">
+            {/* Encrypt & Vault */}
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: 0.2, duration: 0.6 }}
-              className="bg-background/80 backdrop-blur-xl border border-border/50 rounded-xl p-6 hover:border-cyan-500/50 transition-colors"
+              className="bg-background/80 backdrop-blur-xl border border-border/50 rounded-2xl p-8 hover:border-cyan-500/50 transition-colors cursor-pointer group"
+              onClick={() => navigate('/encrypt')}
             >
-              <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center mb-4">
-                <Upload className="w-6 h-6 text-white" />
+              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center mb-5 group-hover:scale-105 transition-transform">
+                <Upload className="w-7 h-7 text-white" />
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Encrypt Image</h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                Upload and encrypt your images with advanced cryptographic protection
+              <h3 className="text-xl font-bold text-foreground mb-2">Encrypt &amp; Vault</h3>
+              <p className="text-sm text-muted-foreground mb-6">
+                Cryptographically sign and encrypt your documents and images.
+                Store them in your secure vault with PINIT watermarking.
               </p>
               <Button
-                onClick={() => navigate('/encrypt')}
-                className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700"
+                onClick={e => { e.stopPropagation(); navigate('/encrypt'); }}
+                className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white font-semibold py-3"
               >
-                Encrypt Image
+                Open Vault
               </Button>
             </motion.div>
 
+            {/* Document Forensics — single unified engine */}
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.3, duration: 0.6 }}
-              className="bg-background/80 backdrop-blur-xl border border-border/50 rounded-xl p-6 hover:border-purple-500/50 transition-colors"
+              transition={{ delay: 0.35, duration: 0.6 }}
+              className="bg-background/80 backdrop-blur-xl border border-border/50 rounded-2xl p-8 hover:border-violet-500/50 transition-colors cursor-pointer group"
+              onClick={() => navigate('/document-forensics')}
             >
-              <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center mb-4">
-                <FileText className="w-6 h-6 text-white" />
+              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center mb-5 group-hover:scale-105 transition-transform">
+                <Microscope className="w-7 h-7 text-white" />
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Verify Proof</h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                Advanced forensic analysis to verify image authenticity and detect manipulation
+              <h3 className="text-xl font-bold text-foreground mb-2">Document Forensics</h3>
+              <p className="text-sm text-muted-foreground mb-3">
+                AI-generation detection · ELA tamper heatmaps · OCR comparison ·
+                Metadata analysis · Fake ID / certificate detection.
               </p>
+              <div className="flex flex-wrap gap-1.5 mb-6">
+                {["Fake IDs", "AI Docs", "Tampered", "Forged Certs"].map(t => (
+                  <span key={t}
+                    className="text-[10px] px-2 py-0.5 rounded-full bg-violet-950/60 border border-violet-700/40 text-violet-300">
+                    {t}
+                  </span>
+                ))}
+              </div>
               <Button
-                onClick={() => navigate('/verify-proof')}
-                variant="outline"
-                className="w-full border-purple-500/50 text-purple-400 hover:bg-purple-500/10"
+                onClick={e => { e.stopPropagation(); navigate('/document-forensics'); }}
+                className="w-full bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-700 hover:to-fuchsia-700 text-white font-semibold py-3"
               >
-                Verify Proof
+                Analyze Document
               </Button>
             </motion.div>
           </div>

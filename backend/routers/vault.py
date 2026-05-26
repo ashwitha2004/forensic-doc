@@ -9,6 +9,83 @@ import uuid
 
 router = APIRouter(tags=["Vault"])
 
+# ── Upload security constants ─────────────────────────────────────────────────
+# Explicit allowlist — anything not in this set is rejected.
+_ALLOWED_MIME_TYPES: set[str] = {
+    # Images
+    "image/jpeg", "image/png", "image/webp", "image/tiff", "image/bmp", "image/gif",
+    # Documents
+    "application/pdf",
+    "application/msword",                                                          # .doc
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",    # .docx
+    "text/plain",
+    # Browsers sometimes send this for binary files — we validate extension too
+    "application/octet-stream",
+}
+
+_ALLOWED_EXTENSIONS: set[str] = {
+    "jpg", "jpeg", "png", "webp", "tiff", "tif", "bmp", "gif",
+    "pdf", "doc", "docx", "txt",
+}
+
+# Explicitly blocked — executable / script types
+_BLOCKED_EXTENSIONS: set[str] = {
+    "exe", "dll", "bat", "cmd", "com", "sh", "bash", "py", "pyc",
+    "js", "ts", "jsx", "tsx", "php", "rb", "pl", "ps1", "psm1",
+    "vbs", "vba", "msi", "jar", "apk", "ipa", "so", "dylib",
+    "bin", "run", "out", "elf",
+}
+
+# Content-type map used by the asset download endpoint
+_CONTENT_TYPE_MAP: dict[str, str] = {
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png":  "image/png",
+    ".webp": "image/webp",
+    ".gif":  "image/gif",
+    ".tiff": "image/tiff",
+    ".tif":  "image/tiff",
+    ".bmp":  "image/bmp",
+    ".pdf":  "application/pdf",
+    ".doc":  "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".txt":  "text/plain",
+}
+
+
+def _validate_upload(filename: str, content_type: str | None, size_bytes: int) -> None:
+    """
+    Raise HTTPException for any upload that fails security checks.
+    Called before any data is written to the database.
+    """
+    if size_bytes == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    # --- Extension check ---
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if ext in _BLOCKED_EXTENSIONS:
+        raise HTTPException(
+            status_code=415,
+            detail=f"File type '.{ext}' is not permitted for security reasons.",
+        )
+
+    # For application/octet-stream (browser fallback) we rely solely on extension
+    effective_mime = content_type or "application/octet-stream"
+    if effective_mime == "application/octet-stream":
+        if ext not in _ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=415,
+                detail=f"Unsupported file extension '.{ext}'. "
+                       "Allowed: jpg, png, webp, tiff, bmp, pdf, doc, docx, txt.",
+            )
+    elif effective_mime not in _ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file type '{effective_mime}'. "
+                   "Allowed types: images (JPG/PNG/WEBP/TIFF/BMP), PDF, DOC, DOCX, TXT.",
+        )
+
 
 @router.post("/save")
 async def save_vault_image(
@@ -199,10 +276,20 @@ async def save_vault_image(
         return {"message": "Saved to vault", "data": record.data[0]}
         
     except Exception as e:
-        print(f"❌ Vault Save: Database insert failed - {str(e)}")
+        err_str = str(e)
+        print(f"❌ Vault Save: Database insert failed - {err_str}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to save to vault: {str(e)}")
+        if "getaddrinfo" in err_str or "11001" in err_str:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Database unreachable: the Supabase project cannot be found. "
+                    "Please log in to supabase.com and resume or recreate the project, "
+                    "then update SUPABASE_URL / SUPABASE_SERVICE_KEY in backend/.env."
+                ),
+            )
+        raise HTTPException(status_code=500, detail=f"Failed to save to vault: {err_str}")
 
 
 @router.get("/list")
@@ -344,20 +431,12 @@ async def download_vault_image(asset_id: str, user_id: str = None):
             print(f"❌ Base64 decode failed: {str(decode_err)}")
             raise HTTPException(status_code=500, detail=f"Failed to decode image: {str(decode_err)}")
         
-        # Detect format from filename
-        content_type = "image/jpeg"
-        file_format = "jpg"
-        if ".png" in file_name.lower():
-            content_type = "image/png"
-            file_format = "png"
-        elif ".webp" in file_name.lower():
-            content_type = "image/webp"
-            file_format = "webp"
-        elif ".gif" in file_name.lower():
-            content_type = "image/gif"
-            file_format = "gif"
-        
-        print(f"✅ Sending original image: {file_name} ({content_type}), size: {len(image_bytes)} bytes")
+        # Detect content-type from filename extension (covers images + documents)
+        import os as _os
+        _ext = _os.path.splitext(file_name.lower())[1]   # e.g. ".pdf", ".docx"
+        content_type = _CONTENT_TYPE_MAP.get(_ext, "application/octet-stream")
+
+        print(f"✅ Sending file: {file_name} ({content_type}), size: {len(image_bytes)} bytes")
         
         return StreamingResponse(
             iter([image_bytes]),
@@ -567,31 +646,42 @@ async def save_scanned_document(
 
 @router.post("/upload")
 async def upload_document(
-    file: UploadFile = None,
-    user_id: str = None,
-    doc_name: str = "",
-    request: Request = None
+    file: UploadFile = File(...),
+    user_id: str = Form(None),    # Must be Form() — plain str skips multipart body
+    doc_name: str = Form(""),
+    request: Request = None,
 ):
     """
     Upload a document file from user's device.
     Supports: PDF, DOCX, XLSX, Images (max 50MB)
     """
     db = get_admin_db()
-    
+
+    # ── Debug: log every received field so failures are easy to trace ─────────
+    print(f"[VaultUpload] file={file.filename if file else None} "
+          f"content_type={file.content_type if file else None} "
+          f"user_id={user_id!r} doc_name={doc_name!r}")
+
     try:
         if not user_id:
+            print("[VaultUpload] ❌ user_id is missing or empty")
             raise HTTPException(status_code=400, detail="user_id required")
-        
+
         if not file or not file.filename:
             raise HTTPException(status_code=400, detail="File required")
         
         # Read file
         contents = await file.read()
         file_size_mb = len(contents) / (1024 * 1024)
-        
-        # Validate size (50MB max)
+
+        # Security validation — MIME type, extension, and size
         if file_size_mb > 50:
             raise HTTPException(status_code=400, detail="File too large (max 50MB)")
+        _validate_upload(file.filename or "upload", file.content_type, len(contents))
+
+        print(f"[VaultUpload] ✅ validation passed — "
+              f"user={user_id} file={file.filename} "
+              f"mime={file.content_type} size={file_size_mb:.2f}MB")
         
         import uuid
         from datetime import datetime
@@ -654,8 +744,20 @@ async def upload_document(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Upload Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        err_str = str(e)
+        print(f"❌ Upload Error: {err_str}")
+        # Detect DNS / connectivity failures and surface a human-readable message
+        if "getaddrinfo" in err_str or "Name or service not known" in err_str or "11001" in err_str:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Database unreachable: the Supabase project cannot be found. "
+                    "The project may have been paused or deleted on the free tier. "
+                    "Please log in to supabase.com, resume or recreate the project, "
+                    "and update SUPABASE_URL / SUPABASE_SERVICE_KEY in backend/.env."
+                ),
+            )
+        raise HTTPException(status_code=500, detail=f"Upload failed: {err_str}")
 
 
 @router.get("/documents/user/{user_id}")
