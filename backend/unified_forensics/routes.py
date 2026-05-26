@@ -37,7 +37,16 @@ class PageResult(BaseModel):
     ai_probability:     float
     camera_probability: float
     fusion_confidence:  float
-    error:              Optional[str] = None
+    # Tamper signals per page
+    ela_score:          Optional[float] = None
+    noise_score:        Optional[float] = None
+    tamper_prob:        Optional[float] = None
+    heatmap_base64:     Optional[str]   = None
+    # OCR per page
+    ocr_text:           Optional[str]   = None
+    ocr_word_count:     int             = 0
+    ocr_confidence:     Optional[float] = None
+    error:              Optional[str]   = None
 
 
 class MetadataResult(BaseModel):
@@ -51,7 +60,7 @@ class MetadataResult(BaseModel):
 class OCRResult(BaseModel):
     text:               Optional[str]  = None
     word_count:         int            = 0
-    confidence:         float          = 0.0
+    confidence:         Optional[float]= None
     language:           Optional[str]  = None
 
 
@@ -62,6 +71,15 @@ class FlaggedRegion(BaseModel):
     h:        int
     severity: float
     label:    Optional[str] = None
+
+
+class SignalScores(BaseModel):
+    """Per-signal tamper scores (0-100 percent scale)."""
+    ela_score:           Optional[float] = None
+    noise_inconsistency: Optional[float] = None
+    layout_score:        Optional[float] = None
+    metadata_score:      Optional[float] = None
+    text_diff_score:     Optional[float] = None
 
 
 class UnifiedForensicsResponse(BaseModel):
@@ -77,6 +95,7 @@ class UnifiedForensicsResponse(BaseModel):
     # Signals
     dominant_signals: List[str]
     signal_breakdown: Dict[str, Any]
+    signal_scores:    Optional[SignalScores] = None   # NEW: structured doc signals
 
     # Branch availability
     ai_branch_used:   bool
@@ -84,7 +103,7 @@ class UnifiedForensicsResponse(BaseModel):
     ai_error:         Optional[str]  = None
     doc_error:        Optional[str]  = None
 
-    # Per-page PDF results
+    # Per-page PDF results (now includes ELA + OCR per page)
     page_results:     List[PageResult] = []
     page_count:       int              = 0
 
@@ -164,30 +183,39 @@ async def analyze(
 
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
-    # ── Serialize response ────────────────────────────────────────────────────
+    # ── Serialize per-page results ────────────────────────────────────────────
     page_results = [
         PageResult(
             page               = r.get("page", i + 1),
-            ai_probability     = r.get("ai_probability",     50.0),
-            camera_probability = r.get("camera_probability",  50.0),
-            fusion_confidence  = r.get("fusion_confidence",   0.0),
+            ai_probability     = float(r.get("ai_probability",     50.0)),
+            camera_probability = float(r.get("camera_probability",  50.0)),
+            fusion_confidence  = float(r.get("fusion_confidence",   0.0)),
+            ela_score          = r.get("ela_score"),
+            noise_score        = r.get("noise_score"),
+            tamper_prob        = r.get("tamper_prob"),
+            heatmap_base64     = r.get("heatmap_base64"),
+            ocr_text           = r.get("ocr_text"),
+            ocr_word_count     = int(r.get("ocr_word_count") or 0),
+            ocr_confidence     = r.get("ocr_confidence"),
             error              = r.get("error"),
         )
         for i, r in enumerate(result.page_results or [])
     ]
 
+    # ── Serialize flagged regions ─────────────────────────────────────────────
     flagged = [
         FlaggedRegion(
             x        = getattr(reg, "x",        0),
             y        = getattr(reg, "y",        0),
-            w        = getattr(reg, "w",        0),
-            h        = getattr(reg, "h",        0),
+            w        = getattr(reg, "width",    getattr(reg, "w", 0)),
+            h        = getattr(reg, "height",   getattr(reg, "h", 0)),
             severity = getattr(reg, "severity", 0.0),
-            label    = getattr(reg, "label",    None),
+            label    = getattr(reg, "reason",   getattr(reg, "label", None)),
         )
         for reg in (result.flagged_regions or [])
     ]
 
+    # ── Serialize metadata ────────────────────────────────────────────────────
     meta_obj = result.metadata
     meta_out: Optional[MetadataResult] = None
     if meta_obj is not None:
@@ -196,35 +224,85 @@ async def analyze(
                 software          = meta_obj.get("software"),
                 creation_date     = meta_obj.get("creation_date"),
                 modification_date = meta_obj.get("modification_date"),
-                suspicious_flags  = meta_obj.get("suspicious_flags", []),
+                suspicious_flags  = list(meta_obj.get("suspicious_flags", []) or []),
                 raw               = meta_obj.get("raw"),
             )
         else:
+            # MetadataResult dataclass / pydantic model from document_forensics
+            soft = (
+                getattr(meta_obj, "software_tag",  None) or
+                getattr(meta_obj, "software",      None) or
+                getattr(meta_obj, "pdf_creator",   None) or
+                getattr(meta_obj, "pdf_producer",  None)
+            )
+            susp_flags = list(getattr(meta_obj, "metadata_notes", []) or [])
+            if getattr(meta_obj, "metadata_suspicious", False):
+                susp_flags.insert(0, "Suspicious metadata detected (AI/editor software signature)")
+
             meta_out = MetadataResult(
-                software          = getattr(meta_obj, "software",          None),
-                creation_date     = getattr(meta_obj, "creation_date",     None),
-                modification_date = getattr(meta_obj, "modification_date", None),
-                suspicious_flags  = list(getattr(meta_obj, "suspicious_flags", []) or []),
-                raw               = getattr(meta_obj, "raw",               None),
+                software          = soft,
+                creation_date     = (
+                    getattr(meta_obj, "capture_datetime",     None) or
+                    getattr(meta_obj, "pdf_creation_date",    None) or
+                    getattr(meta_obj, "creation_date",        None)
+                ),
+                modification_date = (
+                    getattr(meta_obj, "pdf_modification_date", None) or
+                    getattr(meta_obj, "modification_date",     None)
+                ),
+                suspicious_flags  = susp_flags,
+                raw               = getattr(meta_obj, "raw", None),
             )
 
+    # ── Serialize OCR  (FIX: field is extracted_text, not text) ──────────────
     ocr_obj = result.ocr
     ocr_out: Optional[OCRResult] = None
     if ocr_obj is not None:
         if isinstance(ocr_obj, dict):
             ocr_out = OCRResult(
-                text       = ocr_obj.get("text"),
-                word_count = ocr_obj.get("word_count", 0),
-                confidence = ocr_obj.get("confidence", 0.0),
-                language   = ocr_obj.get("language"),
+                text       = ocr_obj.get("extracted_text") or ocr_obj.get("text"),
+                word_count = int(ocr_obj.get("word_count") or 0),
+                confidence = ocr_obj.get("avg_confidence") or ocr_obj.get("confidence"),
+                language   = ocr_obj.get("language_detected") or ocr_obj.get("language"),
             )
         else:
-            ocr_out = OCRResult(
-                text       = getattr(ocr_obj, "text",       None),
-                word_count = getattr(ocr_obj, "word_count", 0),
-                confidence = getattr(ocr_obj, "confidence", 0.0),
-                language   = getattr(ocr_obj, "language",   None),
+            # Schema is document_forensics.schemas.OCRResult → field is extracted_text
+            text_val = (
+                getattr(ocr_obj, "extracted_text", None) or
+                getattr(ocr_obj, "text",           None)
             )
+            conf_val = (
+                getattr(ocr_obj, "avg_confidence", None) or
+                getattr(ocr_obj, "confidence",     None)
+            )
+            ocr_out = OCRResult(
+                text       = text_val,
+                word_count = int(getattr(ocr_obj, "word_count", 0) or 0),
+                confidence = float(conf_val) if conf_val is not None else None,
+                language   = (
+                    getattr(ocr_obj, "language_detected", None) or
+                    getattr(ocr_obj, "language",          None)
+                ),
+            )
+
+    # ── Structured doc signal scores ─────────────────────────────────────────
+    signal_scores: Optional[SignalScores] = None
+    breakdown = result.signal_breakdown or {}
+    # The fusion engine stores doc signals under "doc_signals" key
+    raw_doc_sigs = breakdown.get("doc_signals") or breakdown.get("doc_details", {})
+    if raw_doc_sigs and isinstance(raw_doc_sigs, dict):
+        def _pct(v):
+            if v is None:
+                return None
+            return round(float(v) * 100, 1)
+
+        signal_scores = SignalScores(
+            ela_score           = _pct(raw_doc_sigs.get("ela_score")),
+            noise_inconsistency = _pct(raw_doc_sigs.get("noise_inconsistency")),
+            layout_score        = _pct(raw_doc_sigs.get("layout_anomaly") or raw_doc_sigs.get("layout_score")),
+            metadata_score      = _pct(raw_doc_sigs.get("metadata_suspicion") or raw_doc_sigs.get("metadata_score")),
+            text_diff_score     = _pct(raw_doc_sigs.get("text_anomaly") or raw_doc_sigs.get("text_diff_score")),
+        )
 
     return UnifiedForensicsResponse(
         verdict           = result.verdict,
@@ -234,6 +312,7 @@ async def analyze(
         doc_tamper_prob   = result.doc_tamper_prob,
         dominant_signals  = result.dominant_signals,
         signal_breakdown  = result.signal_breakdown,
+        signal_scores     = signal_scores,
         ai_branch_used    = result.ai_branch_used,
         doc_branch_used   = result.doc_branch_used,
         ai_error          = result.ai_error,

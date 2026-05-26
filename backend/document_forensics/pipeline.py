@@ -177,13 +177,38 @@ def run_document_forensics(
         flagged_regs = tam.flagged_regions
         modules_run.append("tampering_localizer")
     elif is_pdf:
-        warnings.append("ELA heatmap not available for PDF files.")
+        # Render first PDF page to image and run ELA on it
+        logger.info("[DocForensics] Rendering PDF page 1 for ELA heatmap…")
+        try:
+            import io as _io
+            import pypdfium2 as pdfium  # type: ignore[import-untyped]
+            doc = pdfium.PdfDocument(file_bytes)
+            if len(doc) > 0:
+                page   = doc[0]
+                bitmap = page.render(scale=2.0)   # 144 DPI
+                pil    = bitmap.to_pil()
+                buf    = _io.BytesIO()
+                pil.convert("RGB").save(buf, format="JPEG", quality=90)
+                page_img = buf.getvalue()
+
+                tam          = run_tampering_analysis(page_img)
+                ela_score    = tam.ela_score
+                noise_score  = tam.noise_score
+                heatmap_b64  = tam.heatmap_base64
+                flagged_regs = tam.flagged_regions
+                modules_run.append("tampering_localizer_pdf_p1")
+            else:
+                warnings.append("PDF has no pages — ELA skipped.")
+        except ImportError:
+            warnings.append("pypdfium2 not installed — PDF ELA heatmap unavailable.")
+        except Exception as _pdf_ela_err:
+            warnings.append(f"PDF ELA heatmap failed: {_pdf_ela_err}")
     elif is_text:
         warnings.append("ELA heatmap not available for plain-text files.")
     else:
         warnings.append(f"Unrecognised extension '{ext}' — ELA skipped.")
 
-    # ── 3. Layout analysis (images only) ─────────────────────────────────────
+    # ── 3. Layout analysis (images only; for PDFs use the rendered first page) ──
     layout_score = None
     if is_image:
         logger.info("[DocForensics] Running layout/font inconsistency analysis…")
@@ -192,8 +217,25 @@ def run_document_forensics(
         if lay.findings:
             warnings.extend(lay.findings)
         modules_run.append("layout_analyzer")
+    elif is_pdf and heatmap_b64 is not None:
+        # We already rendered the first page above — reuse that image for layout
+        try:
+            import io as _io2
+            import pypdfium2 as _pdfium2  # type: ignore[import-untyped]
+            _doc2 = _pdfium2.PdfDocument(file_bytes)
+            if len(_doc2) > 0:
+                _bmp2 = _doc2[0].render(scale=2.0)
+                _buf2 = _io2.BytesIO()
+                _bmp2.to_pil().convert("RGB").save(_buf2, format="JPEG", quality=90)
+                lay2 = analyze_layout(_buf2.getvalue())
+                layout_score = lay2.layout_score
+                if lay2.findings:
+                    warnings.extend(lay2.findings)
+                modules_run.append("layout_analyzer_pdf")
+        except Exception:
+            pass   # non-fatal
     elif is_text:
-        pass   # No pixel-level layout analysis for plain text
+        pass
 
     # ── 4. OCR text extraction ────────────────────────────────────────────────
     logger.info("[DocForensics] Running OCR extraction…")

@@ -174,7 +174,10 @@ def _run_ai_branch(
 def _run_ai_on_pdf(
     pdf_bytes: bytes,
 ) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], int]:
-    """Render PDF pages and run AI detection on each; merge results."""
+    """
+    Render PDF pages and run AI detection + ELA + per-page OCR on each.
+    Returns (merged_ai_result, per_page_list, page_count).
+    """
     from .pdf_renderer import render_pdf_to_images   # noqa: PLC0415
     from .ai_runner    import run_ai_detection        # noqa: PLC0415
 
@@ -183,30 +186,59 @@ def _run_ai_on_pdf(
         logger.warning("[UnifiedPipeline] PDF rendering returned no pages")
         return None, [], 0
 
+    # Per-page OCR via the enhanced engine
+    page_ocr: List[dict] = []
+    try:
+        from document_forensics.ocr_engine import extract_text_per_page  # noqa: PLC0415
+        page_ocr = extract_text_per_page(pdf_bytes, max_pages=len(pages))
+        logger.info("[UnifiedPipeline] PDF per-page OCR: %d pages", len(page_ocr))
+    except Exception as _ocr_err:
+        logger.warning("[UnifiedPipeline] Per-page OCR failed: %s", _ocr_err)
+
+    # Per-page ELA heatmap via tampering localizer
     page_results: List[Dict[str, Any]] = []
     for i, page_bytes in enumerate(pages):
+        # AI detection
         r = run_ai_detection(page_bytes, suffix=".jpg")
         r["page"] = i + 1
-        page_results.append(r)
-        logger.info("[UnifiedPipeline] PDF page %d/%d: ai_prob=%.1f%%",
-                    i + 1, len(pages), r.get("ai_probability", 0.0))
 
-    # Merge: take the max AI probability (worst-case page wins)
+        # ELA + heatmap for this page
+        try:
+            from document_forensics.tampering_localizer import run_tampering_analysis  # noqa: PLC0415
+            tam = run_tampering_analysis(page_bytes)
+            r["ela_score"]      = tam.ela_score
+            r["noise_score"]    = tam.noise_score
+            r["heatmap_base64"] = tam.heatmap_base64
+            r["tamper_prob"]    = tam.tamper_probability
+        except Exception as _ela_err:
+            logger.debug("[UnifiedPipeline] Page %d ELA failed: %s", i + 1, _ela_err)
+
+        # Per-page OCR
+        if i < len(page_ocr):
+            r["ocr_text"]       = page_ocr[i].get("text")
+            r["ocr_word_count"] = page_ocr[i].get("word_count", 0)
+            r["ocr_confidence"] = page_ocr[i].get("confidence")
+
+        page_results.append(r)
+        logger.info("[UnifiedPipeline] PDF page %d/%d: ai_prob=%.1f%% ela=%.3f",
+                    i + 1, len(pages), r.get("ai_probability", 0.0),
+                    r.get("ela_score", 0.0))
+
+    # Merge: worst-case page wins for AI probability
     valid = [r for r in page_results if r.get("error") is None]
     if not valid:
         return {"error": "All PDF pages failed AI detection"}, page_results, len(pages)
 
-    merged = dict(valid[0])                               # copy structure from first page
-    merged["ai_probability"]   = max(r["ai_probability"]   for r in valid)
-    merged["camera_probability"]= max(r["camera_probability"]for r in valid)
-    merged["fusion_confidence"] = max(r["fusion_confidence"] for r in valid)
-    merged["dl_confidence"]     = max(r["dl_confidence"]     for r in valid)
-    merged["error"]             = None
+    merged = dict(valid[0])
+    merged["ai_probability"]    = max(r["ai_probability"]    for r in valid)
+    merged["camera_probability"] = max(r["camera_probability"] for r in valid)
+    merged["fusion_confidence"]  = max(r["fusion_confidence"]  for r in valid)
+    merged["dl_confidence"]      = max(r["dl_confidence"]      for r in valid)
+    merged["error"]              = None
 
-    # Union of dominant signals across pages
     all_signals: List[str] = []
     for r in valid:
         all_signals.extend(r.get("dominant_signals", []))
-    merged["dominant_signals"] = list(dict.fromkeys(all_signals))   # preserve order, dedup
+    merged["dominant_signals"] = list(dict.fromkeys(all_signals))
 
     return merged, page_results, len(pages)

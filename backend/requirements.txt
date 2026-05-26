@@ -36,6 +36,11 @@ scikit-learn>=1.3.0
 exifread>=3.0.0
 piexif>=1.1.3
 
+# OCR & PDF rendering (forensics pipeline)
+pytesseract>=0.3.10
+pdfplumber>=0.10.0
+pypdfium2>=4.0.0
+
 # ── Deep Learning (optional but strongly recommended) ──────────────────────
 # CPU build of PyTorch — comment out and install the CUDA wheel instead
 # if you have a GPU: https://pytorch.org/get-started/locally/

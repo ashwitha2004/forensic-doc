@@ -47,6 +47,15 @@ interface PageResult {
   ai_probability: number;
   camera_probability: number;
   fusion_confidence: number;
+  // Tamper signals per page
+  ela_score?: number | null;
+  noise_score?: number | null;
+  tamper_prob?: number | null;
+  heatmap_base64?: string | null;
+  // OCR per page
+  ocr_text?: string | null;
+  ocr_word_count?: number;
+  ocr_confidence?: number | null;
   error?: string | null;
 }
 
@@ -70,6 +79,14 @@ interface OCRResult {
   language?: string | null;
 }
 
+interface SignalScores {
+  ela_score?: number | null;
+  noise_inconsistency?: number | null;
+  layout_score?: number | null;
+  metadata_score?: number | null;
+  text_diff_score?: number | null;
+}
+
 interface UnifiedResponse {
   verdict: string;
   fused_score: number;
@@ -78,6 +95,7 @@ interface UnifiedResponse {
   doc_tamper_prob: number;      // 0-1
   dominant_signals: string[];
   signal_breakdown: Record<string, any>;
+  signal_scores?: SignalScores | null;  // structured doc signals
   ai_branch_used: boolean;
   doc_branch_used: boolean;
   ai_error?: string | null;
@@ -630,35 +648,36 @@ const DocumentForensics = () => {
                     </p>
                   </div>
 
-                  {/* Signal breakdown from doc forensics */}
-                  {result.signal_breakdown?.doc_details && (() => {
-                    const d = result.signal_breakdown.doc_details as Record<string, any>;
-                    const sigs = d.signals ?? d.tamper_signals ?? {};
-                    return Object.keys(sigs).length > 0 ? (
+                  {/* Signal scores — use structured signal_scores from backend */}
+                  {result.signal_scores && (() => {
+                    const s = result.signal_scores;
+                    const hasAny = [s.ela_score, s.noise_inconsistency, s.layout_score, s.metadata_score, s.text_diff_score]
+                      .some(v => v !== null && v !== undefined);
+                    return hasAny ? (
                       <div className="grid sm:grid-cols-2 gap-3">
-                        {sigs.ela_score !== undefined && (
+                        {s.ela_score !== null && s.ela_score !== undefined && (
                           <ScoreBar label="ELA Score"
-                            value={Math.round(sigs.ela_score * 100)}
+                            value={s.ela_score}
                             description="Error Level Analysis — detects re-compression splices" />
                         )}
-                        {sigs.noise_inconsistency !== undefined && (
+                        {s.noise_inconsistency !== null && s.noise_inconsistency !== undefined && (
                           <ScoreBar label="Noise Inconsistency"
-                            value={Math.round(sigs.noise_inconsistency * 100)}
+                            value={s.noise_inconsistency}
                             description="Sensor noise pattern mismatch across image blocks" />
                         )}
-                        {sigs.layout_score !== undefined && (
+                        {s.layout_score !== null && s.layout_score !== undefined && (
                           <ScoreBar label="Layout Inconsistency"
-                            value={Math.round(sigs.layout_score * 100)}
+                            value={s.layout_score}
                             description="Font/sharpness variance between document regions" />
                         )}
-                        {sigs.metadata_score !== undefined && (
+                        {s.metadata_score !== null && s.metadata_score !== undefined && (
                           <ScoreBar label="Metadata Anomaly"
-                            value={Math.round(sigs.metadata_score * 100)}
+                            value={s.metadata_score}
                             description="Missing or suspicious EXIF / PDF metadata" />
                         )}
-                        {sigs.text_diff_score !== undefined && (
+                        {s.text_diff_score !== null && s.text_diff_score !== undefined && (
                           <ScoreBar label="Text Content Mismatch"
-                            value={Math.round(sigs.text_diff_score * 100)}
+                            value={s.text_diff_score}
                             description="OCR vs reference text divergence" />
                         )}
                       </div>
@@ -715,41 +734,86 @@ const DocumentForensics = () => {
               )}
 
               {/* ── Per-page PDF ─────────────────────────────────────────── */}
-              {result.page_count > 1 && result.page_results.length > 0 && (
+              {result.page_count > 0 && result.page_results.length > 0 && (
                 <Section
                   title={`PDF Page Analysis (${result.page_count} pages)`}
                   icon={<Cpu className="w-4 h-4 text-cyan-400" />}
                   defaultOpen
                 >
-                  <div className="space-y-2 mt-1">
+                  <div className="space-y-4 mt-1">
                     {result.page_results.map(p => (
                       <div key={p.page}
-                        className="flex items-center gap-4 bg-black/20 rounded-xl px-4 py-3 text-xs">
-                        <span className="text-slate-400 w-16 shrink-0 font-medium">Page {p.page}</span>
-                        <div className="flex-1 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-500 w-12 shrink-0">AI</span>
+                        className="bg-black/25 border border-white/8 rounded-2xl p-4 space-y-3">
+
+                        {/* Page header */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-white">Page {p.page}</span>
+                          {p.error && (
+                            <span className="text-amber-400/70 text-[10px]">{p.error}</span>
+                          )}
+                        </div>
+
+                        {/* AI + Camera bars */}
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="text-slate-500 w-14 shrink-0">AI prob</span>
                             <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
                               <div className={`h-full rounded-full ${probBar(p.ai_probability)}`}
                                 style={{ width: `${p.ai_probability}%` }} />
                             </div>
-                            <span className={`font-mono font-bold w-9 text-right ${probColor(p.ai_probability)}`}>
+                            <span className={`font-mono font-bold w-10 text-right ${probColor(p.ai_probability)}`}>
                               {p.ai_probability.toFixed(0)}%
                             </span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-500 w-12 shrink-0">Camera</span>
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="text-slate-500 w-14 shrink-0">Camera</span>
                             <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
                               <div className="h-full rounded-full bg-emerald-500"
                                 style={{ width: `${p.camera_probability}%` }} />
                             </div>
-                            <span className="font-mono font-bold w-9 text-right text-emerald-400">
+                            <span className="font-mono font-bold w-10 text-right text-emerald-400">
                               {p.camera_probability.toFixed(0)}%
                             </span>
                           </div>
+                          {p.ela_score !== null && p.ela_score !== undefined && (
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="text-slate-500 w-14 shrink-0">ELA</span>
+                              <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full ${probBar(Math.round(p.ela_score * 100))}`}
+                                  style={{ width: `${p.ela_score * 100}%` }} />
+                              </div>
+                              <span className={`font-mono font-bold w-10 text-right ${probColor(Math.round(p.ela_score * 100))}`}>
+                                {(p.ela_score * 100).toFixed(0)}%
+                              </span>
+                            </div>
+                          )}
                         </div>
-                        {p.error && (
-                          <span className="text-amber-400/70 text-[10px] shrink-0">{p.error}</span>
+
+                        {/* Per-page heatmap */}
+                        {p.heatmap_base64 && (
+                          <div className="space-y-1">
+                            <p className="text-[10px] uppercase tracking-widest text-slate-500">
+                              Tamper Heatmap — Page {p.page}
+                            </p>
+                            <img src={p.heatmap_base64} alt={`Heatmap page ${p.page}`}
+                              className="rounded-xl w-full object-contain max-h-48 ring-1 ring-white/10" />
+                          </div>
+                        )}
+
+                        {/* Per-page OCR */}
+                        {p.ocr_text && (
+                          <div className="space-y-1">
+                            <p className="text-[10px] uppercase tracking-widest text-slate-500 flex items-center gap-2">
+                              <ScanLine className="w-3 h-3" />
+                              OCR — Page {p.page}
+                              {p.ocr_word_count ? ` (${p.ocr_word_count} words)` : ""}
+                              {p.ocr_confidence != null ? ` · ${p.ocr_confidence.toFixed(0)}% conf` : ""}
+                            </p>
+                            <pre className="bg-black/30 rounded-xl p-3 text-[11px] text-slate-300
+                                           whitespace-pre-wrap max-h-40 overflow-y-auto font-mono leading-relaxed">
+                              {p.ocr_text}
+                            </pre>
+                          </div>
                         )}
                       </div>
                     ))}
