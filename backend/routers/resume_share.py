@@ -318,12 +318,15 @@ async def request_access(body: AccessRequest):
     # Validate token
     _resolve_token(db, body.token)
 
+    # Normalise email to lowercase for consistent matching
+    normalised_email = body.requester_email.strip().lower()
+
     # Check for duplicate pending request from same email
     dup = (
         db.table("resume_access_requests")
         .select("id, status")
         .eq("share_token", body.token)
-        .eq("requester_email", body.requester_email)
+        .eq("requester_email", normalised_email)
         .execute()
     )
     if dup.data:
@@ -339,7 +342,7 @@ async def request_access(body: AccessRequest):
         res = db.table("resume_access_requests").insert({
             "share_token"      : body.token,
             "requester_name"   : body.requester_name,
-            "requester_email"  : body.requester_email,
+            "requester_email"  : normalised_email,
             "requester_company": body.requester_company or "",
             "message"          : body.message or "",
             "status"           : "pending",
@@ -366,33 +369,41 @@ async def respond_to_request(body: RespondRequest):
     """
     Owner approves or rejects an access request.
     action: 'approve' | 'reject'
+    Uses two-step lookup (no FK join) for reliability.
     """
     if body.action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
 
     db = get_admin_db()
 
-    # Fetch the request
+    # Step 1 — fetch the access request row
     req_res = (
         db.table("resume_access_requests")
-        .select("*, resume_share_links!inner(owner_user_id)")
+        .select("id, share_token, status")
         .eq("id", body.request_id)
         .execute()
     )
-
     if not req_res.data:
         raise HTTPException(status_code=404, detail="Request not found")
 
-    row = req_res.data[0]
+    row         = req_res.data[0]
+    share_token = row["share_token"]
 
-    # Verify the caller is the owner
-    link_info = row.get("resume_share_links") or {}
-    owner_id  = link_info.get("owner_user_id") if isinstance(link_info, dict) else None
+    # Step 2 — verify the caller owns the share link
+    link_res = (
+        db.table("resume_share_links")
+        .select("owner_user_id")
+        .eq("share_token", share_token)
+        .execute()
+    )
+    if not link_res.data:
+        raise HTTPException(status_code=404, detail="Share link not found")
 
-    if owner_id and owner_id != body.user_id:
+    if link_res.data[0]["owner_user_id"] != body.user_id:
         raise HTTPException(status_code=403, detail="You are not the owner of this share link")
 
-    new_status = "approved" if body.action == "approve" else "rejected"
+    # Step 3 — update status
+    new_status  = "approved" if body.action == "approve" else "rejected"
     update_data: dict = {"status": new_status}
     if body.action == "approve":
         update_data["approved_at"] = datetime.now(timezone.utc).isoformat()
@@ -405,6 +416,7 @@ async def respond_to_request(body: RespondRequest):
         "ok"        : True,
         "request_id": body.request_id,
         "status"    : new_status,
+        "share_token": share_token,
     }
 
 
@@ -477,57 +489,74 @@ async def get_activity(asset_id: str, user_id: str):
 # ── Token-parameterised routes (must come AFTER fixed-path routes) ────────────
 
 @router.get("/resume/share/{token}/check-access")
-async def check_access(token: str, requester_email: str):
+async def check_access(
+    token: str,
+    requester_email: Optional[str] = None,
+    email: Optional[str] = None,   # alias accepted from frontend
+):
     """
-    Viewer polls to see if their access request was approved.
-    Returns the original contact findings if approved.
-    Query param: ?requester_email=<email>
+    Viewer polls approval status for THEIR specific email only.
+    Approval is per-viewer-email — never unlocks globally.
+
+    Query params (either accepted):
+      ?requester_email=<email>
+      ?email=<email>
     """
-    db = get_admin_db()
+    viewer_email = requester_email or email
+    if not viewer_email:
+        raise HTTPException(status_code=400, detail="requester_email is required")
+
+    viewer_email = viewer_email.strip().lower()
+
+    db   = get_admin_db()
     link = _resolve_token(db, token)
 
+    # Per-email lookup — NEVER checks globally
     req_res = (
         db.table("resume_access_requests")
         .select("id, status, approved_at")
         .eq("share_token", token)
-        .eq("requester_email", requester_email)
+        .eq("requester_email", viewer_email)
         .order("requested_at", desc=True)
         .limit(1)
         .execute()
     )
 
     if not req_res.data:
-        return {"ok": True, "status": "not_requested", "findings": []}
+        return {"ok": True, "approved": False, "status": "not_requested", "findings": []}
 
     req = req_res.data[0]
 
     if req["status"] != "approved":
-        return {"ok": True, "status": req["status"], "findings": []}
+        return {"ok": True, "approved": False, "status": req["status"], "findings": []}
 
-    # Approved — return original (unmasked) findings
+    # ── Approved: extract + return ORIGINAL (unmasked) contact info ───────────
     asset_id  = link["asset_id"]
     asset_res = db.table("vault_images").select("*").eq("asset_id", asset_id).execute()
     if not asset_res.data:
-        return {"ok": True, "status": "approved", "findings": []}
+        return {"ok": True, "approved": True, "status": "approved", "findings": []}
 
     asset     = asset_res.data[0]
     file_name = asset.get("file_name") or "document"
 
+    unmasked: list[dict] = []
     try:
-        file_bytes = _fetch_and_decrypt(db, asset, file_name)
-        raw_text   = _extract_text(file_bytes, file_name)
+        file_bytes        = _fetch_and_decrypt(db, asset, file_name)
+        raw_text          = _extract_text(file_bytes, file_name)
         _masked, findings = _mask_text(raw_text)
-        # Return original values (unmasked)
         unmasked = [{"type": f["type"], "value": f["original"]} for f in findings]
     except Exception as exc:
-        logger.warning("[RESUME] check-access text extraction failed: %s", exc)
-        unmasked = []
+        logger.warning("[RESUME] check-access extraction failed: %s", exc)
+
+    logger.info("[RESUME] check-access approved — token=%s email=%s findings=%d",
+                token[:8] + "...", viewer_email, len(unmasked))
 
     return {
-        "ok"        : True,
-        "status"    : "approved",
+        "ok"         : True,
+        "approved"   : True,
+        "status"     : "approved",
         "approved_at": req.get("approved_at"),
-        "findings"  : unmasked,
+        "findings"   : unmasked,
     }
 
 
