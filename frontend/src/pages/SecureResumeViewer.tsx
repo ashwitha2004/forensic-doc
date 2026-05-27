@@ -4,18 +4,19 @@
  * Public page — no login required.
  * Route: /shared-view/:token
  *
- * Bug fixes applied:
- *   BUG 1 — Approval polling: polls /check-access every 5 s using the stored
- *            viewer email. Unmasks contacts immediately on approval without
- *            page refresh. Approval is strictly per-email, never global.
- *   BUG 2 — PDF rendering: uses pdf.js (pdfjs-dist) to render the blob
- *            returned by the secure backend stream. No iframe, no Chrome block.
+ * PDF viewer masking (new):
+ *   After each page render, pdf.js text-content positions are used to draw
+ *   opaque masking rectangles directly on the canvas over any email / phone
+ *   text items. When the viewer's access request is approved, the page
+ *   re-renders without the masking step, revealing the original text.
+ *   The PDF file is NEVER modified; the mask is a canvas paint-over only.
  *
  * Security preserved:
- *   - AES-256-GCM decryption happens entirely on the backend
+ *   - AES-256-GCM decryption entirely on backend
  *   - No raw Supabase URLs exposed
  *   - Activity logging intact
- *   - Masking remains for all non-approved viewers
+ *   - Sidebar masking/unmasking logic unchanged
+ *   - Approval is per-viewer-email, never global
  */
 
 import { useEffect, useState, useRef, useCallback } from "react";
@@ -36,8 +37,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 const BACKEND_URL =
   (import.meta as any).env?.VITE_BACKEND_URL || "http://localhost:8000";
 
-const POLL_INTERVAL_MS = 5000;   // check approval every 5 s
-const EMAIL_STORAGE_KEY = "resume_viewer_email";
+const POLL_INTERVAL_MS = 5000;
+/** Returns a token-scoped key so each share link has independent request state. */
+const emailKey = (token: string) => `resume_viewer_email__${token}`;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,16 +62,143 @@ interface CheckAccessResult {
   findings?: Array<{ type: "email" | "phone"; value: string }>;
 }
 
-// ─── PDF Renderer (pdf.js canvas-based, no iframe) ───────────────────────────
+// ─── Canvas masking helpers ───────────────────────────────────────────────────
 
-function PdfViewer({ pdfBytes }: { pdfBytes: Uint8Array }) {
+/** Same patterns as backend — kept in sync intentionally */
+const _EMAIL_RE = /[a-zA-Z0-9._%+\-]{2,}@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
+const _PHONE_RE = /(?<!\d)(?:\+91[\s\-]?)?(?:\(?\d{2,4}\)?[\s\-]?)?\d{3,5}[\s\-]?\d{4,6}(?!\d)/g;
+
+function _maskEmail(email: string): string {
+  const atIdx  = email.lastIndexOf("@");
+  const local  = email.slice(0, atIdx);
+  const domain = email.slice(atIdx);
+  const visible = local.slice(0, 3);
+  return `${visible}${"*".repeat(Math.max(3, local.length - 3))}${domain}`;
+}
+
+function _maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length < 4) return "****";
+  return `${"X".repeat(digits.length - 4)}${digits.slice(-4)}`;
+}
+
+/**
+ * Combine two 6-element affine transform matrices:
+ *   result = outer ∘ inner   (apply inner first, then outer)
+ * Used to convert pdf.js text-item transforms → canvas pixel coordinates.
+ */
+function _combineTransform(outer: number[], inner: number[]): number[] {
+  return [
+    outer[0] * inner[0] + outer[2] * inner[1],
+    outer[1] * inner[0] + outer[3] * inner[1],
+    outer[0] * inner[2] + outer[2] * inner[3],
+    outer[1] * inner[2] + outer[3] * inner[3],
+    outer[0] * inner[4] + outer[2] * inner[5] + outer[4],
+    outer[1] * inner[4] + outer[3] * inner[5] + outer[5],
+  ];
+}
+
+/**
+ * After a pdf.js page has been rendered to `canvas`, paint opaque masking
+ * rectangles over every text item that contains an email or phone number.
+ * Each box shows the masked variant in cyan monospace.
+ *
+ * Called with isApproved=true → function returns immediately (no masking).
+ * The original PDF bytes are never modified.
+ */
+async function _applyContactMask(
+  page: pdfjsLib.PDFPageProxy,
+  viewport: pdfjsLib.PageViewport,
+  canvas: HTMLCanvasElement,
+  isApproved: boolean,
+): Promise<void> {
+  if (isApproved) return; // approved viewer — show original text
+
+  let textContent: pdfjsLib.TextContent;
+  try {
+    textContent = await page.getTextContent();
+  } catch {
+    return; // best-effort — never block rendering
+  }
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  for (const item of textContent.items) {
+    // TextMarkedContent items have no `str` — skip them
+    if (!("str" in item)) continue;
+    const { str, transform, width } = item as any;
+    if (!str || typeof str !== "string") continue;
+
+    // Collect all email / phone matches in this text item
+    const emails = [...str.matchAll(new RegExp(_EMAIL_RE.source, "g"))].map(m => m[0]);
+    const phones = [...str.matchAll(new RegExp(_PHONE_RE.source, "g"))]
+      .map(m => m[0].trim())
+      .filter(p => p.replace(/\D/g, "").length >= 7);
+
+    if (emails.length === 0 && phones.length === 0) continue;
+
+    // --- Convert PDF text-item origin to canvas pixel coordinates ----------
+    //
+    // `transform` is the text matrix in PDF user space: [a b c d x y]
+    // `viewport.transform` converts PDF user space → canvas pixels (y-flipped)
+    // Combined matrix columns:
+    //   [0],[1] — x-axis in canvas space
+    //   [2],[3] — y-axis in canvas space
+    //   [4],[5] — origin (baseline left) in canvas pixels
+    //
+    const combined  = _combineTransform(viewport.transform, transform);
+    const canvasX   = combined[4];
+    const canvasY   = combined[5];                     // text baseline (y-down)
+    const fontH     = Math.abs(combined[3]) || Math.abs(combined[0]) || 12;
+    // item.width is in PDF user space; multiply by viewport scale for canvas px
+    const rawW      = (typeof width === "number" && width > 0)
+                        ? width * viewport.scale
+                        : ctx.measureText(str).width;
+    const rectW     = Math.max(rawW, 20);
+
+    // --- Mask box -----------------------------------------------------------
+    const pad    = 2;
+    const boxTop = canvasY - fontH * 1.15;
+    const boxH   = fontH * 1.4;
+
+    // Solid background — matches the "secure" dark palette used by the sidebar
+    ctx.fillStyle = "rgba(8, 47, 73, 0.97)";   // very dark cyan-950
+    ctx.fillRect(canvasX - pad, boxTop, rectW + pad * 2, boxH);
+
+    // Subtle border so it reads as "redacted" rather than a rendering glitch
+    ctx.strokeStyle = "rgba(34, 211, 238, 0.45)"; // cyan-400 @45%
+    ctx.lineWidth   = 0.8;
+    ctx.strokeRect(canvasX - pad, boxTop, rectW + pad * 2, boxH);
+
+    // Masked text — one line per match; truncate if multiple in one item
+    const maskedStr = [
+      ...emails.map(_maskEmail),
+      ...phones.map(_maskPhone),
+    ].join("  ");
+
+    ctx.fillStyle = "#67e8f9";                  // cyan-300
+    ctx.font      = `${Math.max(8, fontH * 0.72)}px "Courier New", monospace`;
+    ctx.fillText(maskedStr, canvasX + 2, canvasY - fontH * 0.12, rectW - 4);
+  }
+}
+
+// ─── PDF Viewer component ─────────────────────────────────────────────────────
+
+interface PdfViewerProps {
+  pdfBytes: Uint8Array;
+  /** When true the masking step is skipped and the raw PDF text shows through */
+  isApproved: boolean;
+}
+
+function PdfViewer({ pdfBytes, isApproved }: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [numPages, setNumPages]   = useState(0);
-  const [pageNum, setPageNum]     = useState(1);
-  const [scale, setScale]         = useState(1.4);
-  const [pdfDoc, setPdfDoc]       = useState<pdfjsLib.PDFDocumentProxy | null>(null);
-  const canvasRef                 = useRef<HTMLCanvasElement>(null);
-  const renderTaskRef             = useRef<pdfjsLib.RenderTask | null>(null);
+  const [numPages, setNumPages] = useState(0);
+  const [pageNum, setPageNum]   = useState(1);
+  const [scale, setScale]       = useState(1.4);
+  const [pdfDoc, setPdfDoc]     = useState<pdfjsLib.PDFDocumentProxy | null>(null);
+  const canvasRef               = useRef<HTMLCanvasElement>(null);
+  const renderTaskRef           = useRef<pdfjsLib.RenderTask | null>(null);
 
   // Load PDF document from bytes
   useEffect(() => {
@@ -90,20 +219,20 @@ function PdfViewer({ pdfBytes }: { pdfBytes: Uint8Array }) {
     return () => { cancelled = true; };
   }, [pdfBytes]);
 
-  // Render current page onto canvas
+  // Render page → then apply contact masking overlay
+  // isApproved is a dependency: changing it re-renders the page (masked or clean)
   useEffect(() => {
     if (!pdfDoc || !canvasRef.current) return;
     let cancelled = false;
 
     const renderPage = async () => {
       try {
-        // Cancel any in-progress render
         if (renderTaskRef.current) {
           renderTaskRef.current.cancel();
           renderTaskRef.current = null;
         }
 
-        const page    = await pdfDoc.getPage(pageNum);
+        const page     = await pdfDoc.getPage(pageNum);
         const viewport = page.getViewport({ scale });
 
         const canvas  = canvasRef.current!;
@@ -111,11 +240,15 @@ function PdfViewer({ pdfBytes }: { pdfBytes: Uint8Array }) {
         canvas.height = viewport.height;
         canvas.width  = viewport.width;
 
+        // Step 1 — render clean PDF pixels
         const task = page.render({ canvasContext: ctx, viewport });
         renderTaskRef.current = task;
         await task.promise;
+        if (cancelled) return;
+        renderTaskRef.current = null;
 
-        if (!cancelled) renderTaskRef.current = null;
+        // Step 2 — paint contact masking on top (no-op when approved)
+        await _applyContactMask(page, viewport, canvas, isApproved);
       } catch (e: any) {
         if (e?.name !== "RenderingCancelledException") {
           console.error("[PDFViewer] render error:", e);
@@ -125,54 +258,35 @@ function PdfViewer({ pdfBytes }: { pdfBytes: Uint8Array }) {
 
     renderPage();
     return () => { cancelled = true; };
-  }, [pdfDoc, pageNum, scale]);
+  }, [pdfDoc, pageNum, scale, isApproved]); // ← isApproved triggers re-render on approval
 
   return (
     <div className="flex flex-col h-full">
-      {/* PDF toolbar */}
+      {/* Toolbar — unchanged */}
       <div className="flex items-center justify-between bg-slate-800 px-4 py-2 shrink-0">
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setPageNum(p => Math.max(1, p - 1))}
-            disabled={pageNum <= 1}
-            className="p-1 rounded hover:bg-slate-700 disabled:opacity-40 transition-colors"
-          >
+          <button onClick={() => setPageNum(p => Math.max(1, p - 1))} disabled={pageNum <= 1}
+                  className="p-1 rounded hover:bg-slate-700 disabled:opacity-40 transition-colors">
             <ChevronLeft className="w-4 h-4 text-slate-300" />
           </button>
-          <span className="text-xs text-slate-300 tabular-nums">
-            {pageNum} / {numPages}
-          </span>
-          <button
-            onClick={() => setPageNum(p => Math.min(numPages, p + 1))}
-            disabled={pageNum >= numPages}
-            className="p-1 rounded hover:bg-slate-700 disabled:opacity-40 transition-colors"
-          >
+          <span className="text-xs text-slate-300 tabular-nums">{pageNum} / {numPages}</span>
+          <button onClick={() => setPageNum(p => Math.min(numPages, p + 1))} disabled={pageNum >= numPages}
+                  className="p-1 rounded hover:bg-slate-700 disabled:opacity-40 transition-colors">
             <ChevronRight className="w-4 h-4 text-slate-300" />
           </button>
         </div>
         <div className="flex items-center gap-1">
           <button onClick={() => setScale(s => Math.max(0.5, s - 0.2))}
-                  className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 rounded transition-colors text-slate-300">
-            −
-          </button>
-          <span className="text-xs text-slate-400 w-12 text-center tabular-nums">
-            {Math.round(scale * 100)}%
-          </span>
+                  className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 rounded transition-colors text-slate-300">−</button>
+          <span className="text-xs text-slate-400 w-12 text-center tabular-nums">{Math.round(scale * 100)}%</span>
           <button onClick={() => setScale(s => Math.min(3, s + 0.2))}
-                  className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 rounded transition-colors text-slate-300">
-            +
-          </button>
+                  className="px-2 py-0.5 text-xs bg-slate-700 hover:bg-slate-600 rounded transition-colors text-slate-300">+</button>
         </div>
       </div>
 
-      {/* Canvas scroll area */}
-      <div ref={containerRef}
-           className="flex-1 overflow-auto bg-slate-950 flex justify-center py-4">
-        <canvas
-          ref={canvasRef}
-          className="shadow-2xl rounded"
-          style={{ maxWidth: "100%" }}
-        />
+      {/* Canvas */}
+      <div ref={containerRef} className="flex-1 overflow-auto bg-slate-950 flex justify-center py-4">
+        <canvas ref={canvasRef} className="shadow-2xl rounded" style={{ maxWidth: "100%" }} />
       </div>
     </div>
   );
@@ -183,27 +297,27 @@ function PdfViewer({ pdfBytes }: { pdfBytes: Uint8Array }) {
 export default function SecureResumeViewer() {
   const { token } = useParams<{ token: string }>();
 
-  const [preview, setPreview]     = useState<SharePreview | null>(null);
-  const [pdfBytes, setPdfBytes]   = useState<Uint8Array | null>(null);
-  const [imgUrl, setImgUrl]       = useState<string | null>(null);
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState<string | null>(null);
-  const [showText, setShowText]   = useState(false);
-  const [showMask, setShowMask]   = useState(true);
+  const [preview, setPreview]   = useState<SharePreview | null>(null);
+  const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
+  const [imgUrl, setImgUrl]     = useState<string | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState<string | null>(null);
+  const [showText, setShowText] = useState(false);
+  const [showMask, setShowMask] = useState(true);
 
   // Access-request form
-  const [showModal, setShowModal] = useState(false);
-  const [reqName, setReqName]     = useState("");
-  const [reqEmail, setReqEmail]   = useState("");
+  const [showModal, setShowModal]   = useState(false);
+  const [reqName, setReqName]       = useState("");
+  const [reqEmail, setReqEmail]     = useState("");
   const [reqCompany, setReqCompany] = useState("");
   const [reqMessage, setReqMessage] = useState("");
   const [reqLoading, setReqLoading] = useState(false);
-  const [reqError, setReqError]   = useState<string | null>(null);
+  const [reqError, setReqError]     = useState<string | null>(null);
 
   // Approval polling — per-email, never global
-  const [accessResult, setAccessResult]   = useState<CheckAccessResult | null>(null);
-  const [viewerEmail, setViewerEmail]     = useState<string | null>(
-    () => localStorage.getItem(EMAIL_STORAGE_KEY)
+  const [accessResult, setAccessResult] = useState<CheckAccessResult | null>(null);
+  const [viewerEmail, setViewerEmail]   = useState<string | null>(
+    () => (token ? localStorage.getItem(emailKey(token)) : null)
   );
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -216,7 +330,6 @@ export default function SecureResumeViewer() {
       setLoading(true);
       setError(null);
       try {
-        // 1. Masked preview JSON
         const previewRes = await fetch(`${BACKEND_URL}/resume/share/${token}`);
         if (!previewRes.ok) {
           const err = await previewRes.json().catch(() => ({}));
@@ -225,19 +338,17 @@ export default function SecureResumeViewer() {
         const previewData: SharePreview = await previewRes.json();
         setPreview(previewData);
 
-        // 2. Decrypted file blob from secure backend stream
         const fileRes = await fetch(`${BACKEND_URL}/resume/share/${token}/file`);
         if (!fileRes.ok) {
           const err = await fileRes.json().catch(() => ({}));
           throw new Error(err.detail || `Error ${fileRes.status}`);
         }
 
-        const blob      = await fileRes.blob();
-        const isPdf     = previewData.is_pdf || blob.type === "application/pdf";
+        const blob  = await fileRes.blob();
+        const isPdf = previewData.is_pdf || blob.type === "application/pdf";
 
         if (isPdf) {
-          // Convert blob → Uint8Array for pdf.js (avoids Chrome iframe block)
-          const buf   = await blob.arrayBuffer();
+          const buf = await blob.arrayBuffer();
           setPdfBytes(new Uint8Array(buf));
         } else {
           const url = URL.createObjectURL(blob);
@@ -252,10 +363,7 @@ export default function SecureResumeViewer() {
     };
 
     load();
-
-    return () => {
-      if (revoke) URL.revokeObjectURL(revoke);
-    };
+    return () => { if (revoke) URL.revokeObjectURL(revoke); };
   }, [token]);
 
   // ── Approval polling — per viewer email, every 5 s ─────────────────────────
@@ -268,8 +376,6 @@ export default function SecureResumeViewer() {
       if (!res.ok) return;
       const data: CheckAccessResult = await res.json();
       setAccessResult(data);
-
-      // Stop polling once a terminal state is reached
       if (data.status === "approved" || data.status === "rejected") {
         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       }
@@ -280,10 +386,8 @@ export default function SecureResumeViewer() {
 
   useEffect(() => {
     if (!viewerEmail) return;
-
-    checkAccess(viewerEmail); // immediate first check
+    checkAccess(viewerEmail);
     pollRef.current = setInterval(() => checkAccess(viewerEmail), POLL_INTERVAL_MS);
-
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   }, [viewerEmail, checkAccess]);
 
@@ -295,7 +399,6 @@ export default function SecureResumeViewer() {
     }
     setReqLoading(true);
     setReqError(null);
-
     try {
       const res = await fetch(`${BACKEND_URL}/resume/share/request-access`, {
         method : "POST",
@@ -308,20 +411,14 @@ export default function SecureResumeViewer() {
           message          : reqMessage.trim() || undefined,
         }),
       });
-
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Error ${res.status}`);
       }
-
-      const data = await res.json();
-
-      // Persist viewer email so polling survives page navigations
-      const normEmail = reqEmail.trim().toLowerCase();
-      localStorage.setItem(EMAIL_STORAGE_KEY, normEmail);
+      const data       = await res.json();
+      const normEmail  = reqEmail.trim().toLowerCase();
+      if (token) localStorage.setItem(emailKey(token), normEmail);
       setViewerEmail(normEmail);
-
-      // Seed optimistic state while we wait for first poll
       setAccessResult({ ok: true, approved: false, status: data.status ?? "pending" });
       setShowModal(false);
     } catch (e: any) {
@@ -336,8 +433,6 @@ export default function SecureResumeViewer() {
   const maskedFindings = preview?.findings ?? [];
   const emailFindings  = maskedFindings.filter(f => f.type === "email");
   const phoneFindings  = maskedFindings.filter(f => f.type === "phone");
-
-  // For approved viewer: unmasked values from check-access findings
   const unmaskedEmails = (accessResult?.findings ?? []).filter(f => f.type === "email");
   const unmaskedPhones = (accessResult?.findings ?? []).filter(f => f.type === "phone");
 
@@ -365,7 +460,7 @@ export default function SecureResumeViewer() {
   return (
     <div className="min-h-screen bg-slate-950 text-white">
 
-      {/* Top bar */}
+      {/* Top bar — unchanged */}
       <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center gap-3">
         <Shield className="w-5 h-5 text-cyan-400" />
         <div className="flex-1 min-w-0">
@@ -380,10 +475,10 @@ export default function SecureResumeViewer() {
 
       <div className="flex flex-col lg:flex-row h-[calc(100vh-56px)]">
 
-        {/* ── Document viewer ───────────────────────────────────────────── */}
+        {/* ── Document viewer — now passes isApproved to PdfViewer ──────── */}
         <div className="flex-1 relative overflow-hidden bg-slate-950">
           {pdfBytes ? (
-            <PdfViewer pdfBytes={pdfBytes} />
+            <PdfViewer pdfBytes={pdfBytes} isApproved={isApproved} />
           ) : imgUrl ? (
             <div className="w-full h-full flex items-center justify-center p-4 bg-slate-900">
               <img src={imgUrl} alt={preview?.file_name ?? "Document"}
@@ -395,7 +490,6 @@ export default function SecureResumeViewer() {
             </div>
           )}
 
-          {/* Watermark banner */}
           <div className="absolute bottom-2 left-1/2 -translate-x-1/2 pointer-events-none
                           bg-slate-950/80 text-slate-400 text-xs px-3 py-1
                           rounded-full backdrop-blur-sm">
@@ -403,11 +497,10 @@ export default function SecureResumeViewer() {
           </div>
         </div>
 
-        {/* ── Right info panel ──────────────────────────────────────────── */}
+        {/* ── Right info panel — identical to before ────────────────────── */}
         <aside className="w-full lg:w-80 bg-slate-900 border-t lg:border-t-0 lg:border-l
                           border-slate-800 flex flex-col overflow-y-auto">
 
-          {/* Security badges */}
           <div className="p-4 border-b border-slate-800 flex flex-col gap-2">
             <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
               Security Info
@@ -420,7 +513,7 @@ export default function SecureResumeViewer() {
                        text="This view is logged" color="cyan" />
           </div>
 
-          {/* Contact info — masked/unmasked */}
+          {/* Sidebar contact masking — unchanged */}
           {maskedFindings.length > 0 && (
             <div className="p-4 border-b border-slate-800">
               <div className="flex items-center justify-between mb-3">
@@ -434,14 +527,11 @@ export default function SecureResumeViewer() {
                 ) : (
                   <button onClick={() => setShowMask(v => !v)}
                           className="text-xs text-slate-500 hover:text-white flex items-center gap-1 transition-colors">
-                    {showMask
-                      ? <><EyeOff className="w-3 h-3" /> Masked</>
-                      : <><Eye className="w-3 h-3" /> Visible</>}
+                    {showMask ? <><EyeOff className="w-3 h-3" /> Masked</> : <><Eye className="w-3 h-3" /> Visible</>}
                   </button>
                 )}
               </div>
 
-              {/* Emails */}
               {emailFindings.length > 0 && (
                 <div className="mb-2">
                   <p className="text-xs text-slate-500 mb-1 flex items-center gap-1">
@@ -449,9 +539,7 @@ export default function SecureResumeViewer() {
                   </p>
                   {isApproved
                     ? unmaskedEmails.map((f, i) => (
-                        <p key={i} className="text-sm font-mono text-green-300 bg-slate-800 px-2 py-1 rounded mb-1">
-                          {f.value}
-                        </p>
+                        <p key={i} className="text-sm font-mono text-green-300 bg-slate-800 px-2 py-1 rounded mb-1">{f.value}</p>
                       ))
                     : emailFindings.map((f, i) => (
                         <p key={i} className="text-sm font-mono text-cyan-300 bg-slate-800 px-2 py-1 rounded mb-1">
@@ -461,7 +549,6 @@ export default function SecureResumeViewer() {
                 </div>
               )}
 
-              {/* Phones */}
               {phoneFindings.length > 0 && (
                 <div>
                   <p className="text-xs text-slate-500 mb-1 flex items-center gap-1">
@@ -469,9 +556,7 @@ export default function SecureResumeViewer() {
                   </p>
                   {isApproved
                     ? unmaskedPhones.map((f, i) => (
-                        <p key={i} className="text-sm font-mono text-green-300 bg-slate-800 px-2 py-1 rounded mb-1">
-                          {f.value}
-                        </p>
+                        <p key={i} className="text-sm font-mono text-green-300 bg-slate-800 px-2 py-1 rounded mb-1">{f.value}</p>
                       ))
                     : phoneFindings.map((f, i) => (
                         <p key={i} className="text-sm font-mono text-cyan-300 bg-slate-800 px-2 py-1 rounded mb-1">
@@ -483,20 +568,17 @@ export default function SecureResumeViewer() {
             </div>
           )}
 
-          {/* Access-request CTA / status */}
+          {/* Access-request CTA / status — unchanged */}
           {maskedFindings.length > 0 && (
             <div className="p-4 border-b border-slate-800">
               {!accessResult && !viewerEmail && (
-                <button
-                  onClick={() => setShowModal(true)}
-                  className="w-full bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-medium
-                             py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
+                <button onClick={() => setShowModal(true)}
+                        className="w-full bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-medium
+                                   py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2">
                   <UserPlus className="w-4 h-4" />
                   Request Full Contact Info
                 </button>
               )}
-
               {accessResult?.status === "pending" && (
                 <div className="flex items-center gap-2 bg-yellow-950/30 border border-yellow-700/30 rounded-lg px-3 py-2.5">
                   <Clock className="w-4 h-4 text-yellow-400 shrink-0 animate-pulse" />
@@ -506,17 +588,15 @@ export default function SecureResumeViewer() {
                   </div>
                 </div>
               )}
-
               {isApproved && (
                 <div className="flex items-center gap-2 bg-green-950/30 border border-green-700/30 rounded-lg px-3 py-2.5">
                   <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
                   <div>
                     <p className="text-xs font-medium text-green-300">Access approved!</p>
-                    <p className="text-xs text-green-500/80">Full contact info is now visible above</p>
+                    <p className="text-xs text-green-500/80">Full contact info is now visible</p>
                   </div>
                 </div>
               )}
-
               {accessResult?.status === "rejected" && (
                 <div className="flex items-center gap-2 bg-red-950/30 border border-red-700/30 rounded-lg px-3 py-2.5">
                   <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
@@ -529,13 +609,11 @@ export default function SecureResumeViewer() {
             </div>
           )}
 
-          {/* Text preview (masked) */}
+          {/* Text preview — unchanged */}
           {preview?.masked_text && (
             <div className="p-4 border-b border-slate-800 flex-1 flex flex-col overflow-hidden">
               <div className="flex items-center justify-between mb-2">
-                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Text Preview
-                </h2>
+                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Text Preview</h2>
                 <button onClick={() => setShowText(v => !v)}
                         className="text-xs text-slate-500 hover:text-white flex items-center gap-1 transition-colors">
                   <FileText className="w-3 h-3" />
@@ -559,11 +637,10 @@ export default function SecureResumeViewer() {
         </aside>
       </div>
 
-      {/* ── Access Request Modal ─────────────────────────────────────────── */}
+      {/* ── Access Request Modal — unchanged ─────────────────────────────── */}
       {showModal && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl">
-
             <div className="flex items-center justify-between p-5 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 <UserPlus className="w-5 h-5 text-cyan-400" />
@@ -574,70 +651,51 @@ export default function SecureResumeViewer() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-
             <div className="p-5 space-y-4">
               <p className="text-sm text-slate-400">
                 Your details will be sent to the document owner. You'll receive unmasked contact info once approved.
               </p>
-
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Full Name *</label>
-                <input value={reqName} onChange={e => setReqName(e.target.value)}
-                       placeholder="Your full name"
-                       className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
-                                  text-sm text-white placeholder-slate-500 focus:outline-none
-                                  focus:border-cyan-500 transition-colors" />
+                <input value={reqName} onChange={e => setReqName(e.target.value)} placeholder="Your full name"
+                       className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white
+                                  placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors" />
               </div>
-
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Email Address *</label>
-                <input type="email" value={reqEmail} onChange={e => setReqEmail(e.target.value)}
-                       placeholder="your@email.com"
-                       className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
-                                  text-sm text-white placeholder-slate-500 focus:outline-none
-                                  focus:border-cyan-500 transition-colors" />
+                <input type="email" value={reqEmail} onChange={e => setReqEmail(e.target.value)} placeholder="your@email.com"
+                       className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white
+                                  placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors" />
               </div>
-
               <div>
                 <label className="block text-xs text-slate-400 mb-1 flex items-center gap-1">
                   <Building2 className="w-3 h-3" /> Company / Organization
                 </label>
-                <input value={reqCompany} onChange={e => setReqCompany(e.target.value)}
-                       placeholder="Optional"
-                       className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
-                                  text-sm text-white placeholder-slate-500 focus:outline-none
-                                  focus:border-cyan-500 transition-colors" />
+                <input value={reqCompany} onChange={e => setReqCompany(e.target.value)} placeholder="Optional"
+                       className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white
+                                  placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors" />
               </div>
-
               <div>
                 <label className="block text-xs text-slate-400 mb-1 flex items-center gap-1">
                   <MessageSquare className="w-3 h-3" /> Message to Owner
                 </label>
                 <textarea value={reqMessage} onChange={e => setReqMessage(e.target.value)}
-                          placeholder="Why are you requesting contact info? (optional)"
-                          rows={3}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
-                                     text-sm text-white placeholder-slate-500 focus:outline-none
-                                     focus:border-cyan-500 transition-colors resize-none" />
+                          placeholder="Why are you requesting contact info? (optional)" rows={3}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white
+                                     placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors resize-none" />
               </div>
-
               {reqError && (
-                <p className="text-xs text-red-400 bg-red-950/30 border border-red-800/30 rounded px-3 py-2">
-                  {reqError}
-                </p>
+                <p className="text-xs text-red-400 bg-red-950/30 border border-red-800/30 rounded px-3 py-2">{reqError}</p>
               )}
             </div>
-
             <div className="p-5 border-t border-slate-800 flex gap-3">
               <button onClick={() => { setShowModal(false); setReqError(null); }}
-                      className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm
-                                 font-medium py-2.5 rounded-lg transition-colors">
+                      className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium py-2.5 rounded-lg transition-colors">
                 Cancel
               </button>
               <button onClick={submitRequest} disabled={reqLoading}
-                      className="flex-1 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white
-                                 text-sm font-medium py-2.5 rounded-lg transition-colors
-                                 flex items-center justify-center gap-2">
+                      className="flex-1 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white text-sm font-medium
+                                 py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2">
                 {reqLoading
                   ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   : <Send className="w-4 h-4" />}
@@ -651,7 +709,7 @@ export default function SecureResumeViewer() {
   );
 }
 
-// ── Badge helper ───────────────────────────────────────────────────────────────
+// ── Badge helper — unchanged ───────────────────────────────────────────────────
 function InfoBadge({ icon, text, color }: {
   icon: React.ReactNode; text: string; color: "green" | "cyan" | "yellow";
 }) {
