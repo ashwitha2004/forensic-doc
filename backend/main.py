@@ -11,6 +11,8 @@ env_path = Path(__file__).parent / ".env"
 load_dotenv(env_path)
 
 from routers import auth, vault, pinit_verification
+from routers.vault_share import router as vault_share_router
+from routers.resume_share import router as resume_share_router
 from forensic import forensic_router
 from inference import inference_router
 from document_forensics import document_forensics_router
@@ -76,6 +78,12 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth")
 app.include_router(vault.router, prefix="/vault")
 app.include_router(pinit_verification.router, prefix="/pinit")
+
+# Register secure sharing router (Phase 2-4: viewer, masking, activity log)
+app.include_router(vault_share_router)
+
+# Register resume secure sharing router (full workflow: share, request access, dashboard)
+app.include_router(resume_share_router)
 
 # Register forensic analysis router
 app.include_router(forensic_router)

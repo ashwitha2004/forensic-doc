@@ -4,6 +4,7 @@ from db.database import get_admin_db
 from models.schemas import VaultImageCreate, VaultImageResponse, EncryptionRecordCreate
 from utils.auth_helpers import log_action
 from utils.cloudinary_helper import upload_thumbnail_base64, delete_thumbnail, download_image
+from utils.aes_cipher import encrypt_bytes, decrypt_bytes, is_encrypted
 import hashlib
 import uuid
 
@@ -51,6 +52,83 @@ _CONTENT_TYPE_MAP: dict[str, str] = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".txt":  "text/plain",
 }
+
+
+_STORAGE_BUCKET = "vault-encrypted"
+_STORAGE_PREFIX  = f"supabase-storage:{_STORAGE_BUCKET}/"
+
+
+def _fetch_and_decrypt(db, asset: dict, file_name: str) -> bytes:
+    """
+    Retrieve and decrypt file bytes for any vault asset.
+
+    Priority order:
+      1. Supabase Storage pointer in image_url  (new encrypted uploads)
+      2. Encrypted base64 in thumbnail_base64   (DB-fallback encrypted)
+      3. Plain base64 in image_base64           (legacy image records)
+
+    Always returns raw decrypted/plain bytes ready to stream.
+    Raises HTTPException on any failure.
+    """
+    import base64 as _b64
+    import os as _os
+
+    image_url_ptr = asset.get("image_url", "") or ""
+    raw_bytes: bytes | None = None
+
+    # ── Path 1: Supabase Storage (new encrypted uploads) ──────────────────────
+    if image_url_ptr.startswith(_STORAGE_PREFIX):
+        storage_path = image_url_ptr[len(_STORAGE_PREFIX):]
+        print(f"[VAULT] Fetching encrypted blob from Storage — path: {storage_path}")
+        try:
+            raw_bytes = db.storage.from_(_STORAGE_BUCKET).download(storage_path)
+            print(f"[VAULT] Storage fetch OK — {len(raw_bytes)} B")
+        except Exception as st_err:
+            print(f"[VAULT] ❌ Storage fetch failed: {st_err}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to fetch encrypted file from storage: {st_err}",
+            )
+
+    # ── Path 2: DB base64 column (thumbnail_base64 / image_base64) ───────────
+    if raw_bytes is None:
+        b64_data = (
+            asset.get("thumbnail_base64") or
+            asset.get("image_base64")
+        )
+        if not b64_data:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "No file data found in vault. "
+                    "The record has no storage pointer and no base64 data."
+                ),
+            )
+        # Strip data-URL prefix if present
+        if b64_data.startswith("data:"):
+            b64_data = b64_data.split(",", 1)[1]
+        try:
+            raw_bytes = _b64.b64decode(b64_data)
+            print(f"[VAULT] Loaded {len(raw_bytes)} B from DB column")
+        except Exception as decode_err:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to decode stored data: {decode_err}",
+            )
+
+    # ── AES-256-GCM decryption ────────────────────────────────────────────────
+    if is_encrypted(raw_bytes):
+        try:
+            file_bytes = decrypt_bytes(raw_bytes)
+            print(f"[VAULT] Decryption success — {len(raw_bytes)} B → {len(file_bytes)} B")
+            return file_bytes
+        except Exception as dec_err:
+            print(f"[VAULT] ❌ Decryption failed: {dec_err}")
+            raise HTTPException(status_code=500, detail=f"Decryption failed: {dec_err}")
+
+    # Legacy plaintext record — return as-is
+    print(f"[VAULT] Legacy plaintext record — serving as-is for {file_name}")
+    return raw_bytes
 
 
 def _validate_upload(filename: str, content_type: str | None, size_bytes: int) -> None:
@@ -392,58 +470,26 @@ async def download_vault_image(asset_id: str, user_id: str = None):
             print(f"❌ Vault Download: Asset not found for asset_id={asset_id}, user_id={user_id}")
             raise HTTPException(status_code=403, detail="Asset not found or access denied")
         
-        asset = result.data[0]
-        file_name = asset.get("file_name", "image")
-        
-        print(f"✅ Vault Download: Found asset - {file_name}")
-        print(f"   - image_base64 exists: {bool(asset.get('image_base64'))}")
-        print(f"   - image_base64 length: {len(asset.get('image_base64') or '') // 1000} KB")
-        print(f"   - thumbnail_base64 exists: {bool(asset.get('thumbnail_base64'))}")
-        
-        # IMPORTANT: Download ORIGINAL full-resolution image from database, NOT compressed Cloudinary thumbnail
-        # Cloudinary is only for preview/thumbnails (400x400)
-        print(f"📥 Serving ORIGINAL full-resolution image from database")
-        image_base64 = asset.get("image_base64")
-        
-        if not image_base64:
-            print(f"⚠️ No image_base64 in database, trying thumbnail_base64 fallback")
-            image_base64 = asset.get("thumbnail_base64")
-        
-        if not image_base64:
-            error_msg = "No image data stored in vault"
-            print(f"❌ {error_msg}")
-            raise HTTPException(status_code=500, detail=error_msg)
-        
-        print(f"✅ Found image in database, size: {len(image_base64)} bytes")
-        
-        # Decode base64 and serve
-        import base64
-        if image_base64.startswith("data:"):
-            # It's a data URL, extract the base64 part
-            image_base64_clean = image_base64.split(",")[1]
-            print(f"📝 Cleaned data URL, original length: {len(image_base64)}, cleaned: {len(image_base64_clean)}")
-            image_base64 = image_base64_clean
-        
-        try:
-            image_bytes = base64.b64decode(image_base64)
-            print(f"📊 Decoded image: {len(image_bytes)} bytes")
-        except Exception as decode_err:
-            print(f"❌ Base64 decode failed: {str(decode_err)}")
-            raise HTTPException(status_code=500, detail=f"Failed to decode image: {str(decode_err)}")
-        
-        # Detect content-type from filename extension (covers images + documents)
-        import os as _os
-        _ext = _os.path.splitext(file_name.lower())[1]   # e.g. ".pdf", ".docx"
-        content_type = _CONTENT_TYPE_MAP.get(_ext, "application/octet-stream")
+        asset     = result.data[0]
+        file_name = asset.get("file_name") or asset.get("original_filename") or "document"
 
-        print(f"✅ Sending file: {file_name} ({content_type}), size: {len(image_bytes)} bytes")
-        
+        print(f"[VAULT] Found asset: {file_name}")
+
+        file_bytes = _fetch_and_decrypt(db, asset, file_name)
+
+        # MIME type from extension
+        import os as _os
+        _ext         = _os.path.splitext(file_name.lower())[1]
+        content_type = _CONTENT_TYPE_MAP.get(_ext, "application/octet-stream")
+        print(f"[VAULT] MIME type detected: {content_type} for {file_name}")
+        print(f"[VAULT] Streaming decrypted file: {file_name} ({len(file_bytes)} bytes)")
+
         return StreamingResponse(
-            iter([image_bytes]),
+            iter([file_bytes]),
             media_type=content_type,
             headers={
                 "Content-Disposition": f'attachment; filename="{file_name}"'
-            }
+            },
         )
         
     except HTTPException:
@@ -686,59 +732,122 @@ async def upload_document(
         import uuid
         from datetime import datetime
         import base64
-        
+
         # Generate asset ID
-        doc_id = str(uuid.uuid4())
+        doc_id   = str(uuid.uuid4())
         asset_id = f"doc_{doc_id[:8]}_{int(datetime.now().timestamp() * 1000)}"
-        
+
         # Determine file display name
-        display_name = doc_name if doc_name.strip() else file.filename
-        
-        # Encode file data as base64 for storage
-        file_data_base64 = base64.b64encode(contents).decode('utf-8')
-        
-        # Save to vault_images table
-        vault_record = {
-            "user_id": user_id,
-            "asset_id": asset_id,
-            "file_name": display_name,
-            "file_size": f"{file_size_mb:.2f} MB",
-            "file_type": file.content_type or "application/octet-stream",
-            "resolution": "standard",
-            "capture_timestamp": datetime.now().isoformat(),
-            "document_type": "uploaded_document",
-            "original_filename": file.filename,
-            "encryption_enabled": True,
-            "owner_name": user_id,
-            "owner_email": user_id,
-            "thumbnail_base64": file_data_base64
-        }
-        
+        display_name = doc_name.strip() if doc_name.strip() else file.filename
+
+        # ── AES-256-GCM encryption ────────────────────────────────────────────
+        print(f"[AES] encryption started — plaintext {len(contents)} B  file={file.filename}")
+        try:
+            encrypted_bytes = encrypt_bytes(contents)
+            encrypted_size_kb = round(len(encrypted_bytes) / 1024, 1)
+            print(f"[AES] encrypt success — encrypted size {len(encrypted_bytes)} B")
+        except Exception as enc_err:
+            print(f"[AES] ❌ encrypt failed: {enc_err}")
+            raise HTTPException(status_code=500, detail=f"File encryption failed: {enc_err}")
+
+        # ── Upload encrypted binary to Supabase Storage ───────────────────────
+        # Path inside the bucket: <user_id>/<asset_id>.enc
+        # .enc extension signals the file is AES-encrypted binary
+        _safe_uid   = user_id.replace("/", "_").replace("..", "_")
+        storage_path = f"{_safe_uid}/{asset_id}.enc"
+        _BUCKET      = "vault-encrypted"
+
+        print(f"[STORAGE] uploading encrypted blob to bucket '{_BUCKET}' path='{storage_path}'")
+        storage_ok = False
+        try:
+            db.storage.from_(_BUCKET).upload(
+                path        = storage_path,
+                file        = encrypted_bytes,
+                file_options= {"content-type": "application/octet-stream", "upsert": "false"},
+            )
+            storage_ok = True
+            print(f"[STORAGE] upload success — {encrypted_size_kb} KB stored in vault-encrypted")
+        except Exception as st_err:
+            # Storage upload failed — fall back to base64-in-DB so upload still succeeds
+            print(f"[STORAGE] ❌ Storage upload failed (falling back to DB): {st_err}")
+
+        # ── Build DB record ───────────────────────────────────────────────────
+        import base64 as _b64
+
+        if storage_ok:
+            # Primary path: store storage pointer; no raw data in DB
+            vault_record = {
+                "user_id"           : user_id,
+                "asset_id"          : asset_id,
+                "file_name"         : display_name,
+                "file_size"         : f"{file_size_mb:.2f} MB",
+                "file_type"         : file.content_type or "application/octet-stream",
+                "resolution"        : "standard",
+                "capture_timestamp" : datetime.now().isoformat(),
+                "document_type"     : "uploaded_document",
+                "original_filename" : file.filename,
+                "encryption_enabled": True,
+                "owner_name"        : user_id,
+                "owner_email"       : user_id,
+                # Store the bucket path so the download endpoint knows where to fetch
+                "image_url"         : f"supabase-storage:{_BUCKET}/{storage_path}",
+                "thumbnail_base64"  : None,   # not stored in DB
+            }
+        else:
+            # Fallback: store encrypted binary as base64 in DB column
+            file_data_base64 = _b64.b64encode(encrypted_bytes).decode("utf-8")
+            vault_record = {
+                "user_id"           : user_id,
+                "asset_id"          : asset_id,
+                "file_name"         : display_name,
+                "file_size"         : f"{file_size_mb:.2f} MB",
+                "file_type"         : file.content_type or "application/octet-stream",
+                "resolution"        : "standard",
+                "capture_timestamp" : datetime.now().isoformat(),
+                "document_type"     : "uploaded_document",
+                "original_filename" : file.filename,
+                "encryption_enabled": True,
+                "owner_name"        : user_id,
+                "owner_email"       : user_id,
+                "thumbnail_base64"  : file_data_base64,   # AES-256-GCM encrypted, base64-encoded
+            }
+
         response = db.table("vault_images").insert(vault_record).execute()
-        
+
         if not response.data:
             raise HTTPException(status_code=500, detail="Failed to save to vault")
-        
+
         vault_image_id = response.data[0]["id"]
-        
+
         if request:
             log_action(
                 user_id=user_id,
                 action="upload_document",
-                details={"filename": file.filename, "size_mb": file_size_mb},
-                ip=str(request.client.host)
+                details={
+                    "filename"       : file.filename,
+                    "size_mb"        : file_size_mb,
+                    "encrypted_kb"   : encrypted_size_kb,
+                    "encryption"     : "AES-256-GCM",
+                    "storage"        : "supabase-bucket" if storage_ok else "db-fallback",
+                    "storage_path"   : storage_path if storage_ok else None,
+                },
+                ip=str(request.client.host),
             )
-        
-        print(f"✅ Document Uploaded: {file.filename} ({file_size_mb:.2f}MB) by {user_id}")
-        
+
+        print(f"[AES] upload success — encrypted file in {'Supabase Storage' if storage_ok else 'DB fallback'}")
+        print(f"✅ Document Uploaded & Encrypted: {file.filename} ({file_size_mb:.2f}MB) by {user_id}")
+
         return {
-            "ok": True,
+            "ok"            : True,
             "vault_image_id": vault_image_id,
-            "asset_id": asset_id,
-            "file_name": display_name,
-            "file_size": f"{file_size_mb:.2f} MB",
-            "file_type": file.content_type,
-            "message": "Document successfully encrypted and stored"
+            "asset_id"      : asset_id,
+            "file_name"     : display_name,
+            "file_size"     : f"{file_size_mb:.2f} MB",
+            "encrypted_size": f"{encrypted_size_kb} KB",
+            "file_type"     : file.content_type,
+            "encryption"    : "AES-256-GCM",
+            "storage"       : "supabase-bucket" if storage_ok else "db-fallback",
+            "message"       : "Document encrypted with AES-256-GCM and stored securely in vault",
         }
     
     except HTTPException:
@@ -900,29 +1009,23 @@ async def download_document(doc_id: str, user_id: str = None):
             raise HTTPException(status_code=404, detail="Document not found")
         
         document = response.data[0]
-        file_name = document.get("file_name", "document")
+        file_name = document.get("file_name") or document.get("original_filename") or "document"
         file_type = document.get("file_type", "application/octet-stream")
-        file_data_base64 = document.get("thumbnail_base64")  # File data stored as base64
-        
-        if not file_data_base64:
-            raise HTTPException(status_code=500, detail="File data not found")
-        
-        # Decode base64 to binary
-        import base64
-        try:
-            file_bytes = base64.b64decode(file_data_base64)
-            print(f"✅ Document Download: {file_name} ({len(file_bytes)} bytes) for user {user_id}")
-        except Exception as decode_err:
-            print(f"❌ Base64 decode failed: {str(decode_err)}")
-            raise HTTPException(status_code=500, detail=f"Failed to decode file: {str(decode_err)}")
-        
-        # Stream the file
+
+        file_bytes = _fetch_and_decrypt(db, document, file_name)
+
+        import os as _os
+        _ext         = _os.path.splitext(file_name.lower())[1]
+        content_type = _CONTENT_TYPE_MAP.get(_ext, file_type)
+        print(f"[VAULT] MIME type detected: {content_type}")
+        print(f"[VAULT] Streaming decrypted file: {file_name} ({len(file_bytes)} bytes) for user {user_id}")
+
         return StreamingResponse(
             iter([file_bytes]),
-            media_type=file_type,
+            media_type=content_type,
             headers={
                 "Content-Disposition": f'attachment; filename="{file_name}"'
-            }
+            },
         )
     
     except HTTPException:
