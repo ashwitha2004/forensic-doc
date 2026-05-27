@@ -10,8 +10,11 @@ import {
   CheckCircle,
   AlertCircle,
   FileText,
-  File,
   Lock,
+  Share2,
+  Copy,
+  BarChart2,
+  ExternalLink,
 } from "lucide-react";
 import { embedAdvancedWatermark, type AdvancedWatermarkMetadata } from "@/lib/advancedSteganography";
 import { embedSimpleWatermark, type SimpleWatermarkMetadata } from "@/lib/simpleSteganography";
@@ -107,6 +110,12 @@ const Encrypt = () => {
   // ── New state for document support ────────────────────────────────────────
   const [selectedFile, setSelectedFile]     = useState<File | null>(null);
   const [fileCategory, setFileCategory]     = useState<"image" | "document" | null>(null);
+
+  // ── Share link state ───────────────────────────────────────────────────────
+  const [shareToken, setShareToken]         = useState<string | null>(null);
+  const [shareLoading, setShareLoading]     = useState(false);
+  const [shareError, setShareError]         = useState<string | null>(null);
+  const [shareCopied, setShareCopied]       = useState(false);
 
   // ── Existing image helpers (unchanged) ────────────────────────────────────
 
@@ -252,16 +261,13 @@ const Encrypt = () => {
         localStorage.getItem("biovault_user_id") ||    // underscore — legacy key
         "USR-UNKNOWN";
 
-      console.log("[ENCRYPT] Document upload — user:", realUserId, "file:", selectedFile.name,
-                  "mime:", selectedFile.type, "size:", (selectedFile.size / 1024).toFixed(0) + " KB");
+      const fileSizeKB = (selectedFile.size / 1024).toFixed(1);
+      console.log("[ENCRYPT] encryption started —", selectedFile.name,
+                  `| ${fileSizeKB} KB | ${selectedFile.type} | user: ${realUserId}`);
 
       const form = new FormData();
       form.append("file", selectedFile, selectedFile.name);   // explicit filename for MIME detection
       form.append("user_id", realUserId);
-
-      // Debug: list every key being sent so we can confirm user_id is present
-      console.log("[ENCRYPT] FormData keys:", [...form.keys()]);
-      console.log("[ENCRYPT] FormData user_id value:", form.get("user_id"));
 
       const res = await fetch(`${BACKEND_URL}/vault/upload`, {
         method: "POST",
@@ -276,7 +282,10 @@ const Encrypt = () => {
       }
 
       const data = await res.json();
-      console.log("[ENCRYPT] Document vault upload OK:", data);
+      console.log("[ENCRYPT] encrypted size —", data.encrypted_size,
+                  `| method: ${data.encryption || "AES-256-GCM"}`);
+      console.log("[ENCRYPT] upload success — asset_id:", data.asset_id,
+                  "| file:", data.file_name, "| vault stored as encrypted binary");
 
       setEncryptionResult({
         success:  true,
@@ -349,6 +358,51 @@ const Encrypt = () => {
     document.body.removeChild(link);
   };
 
+  // ── Create share link for vaulted document ────────────────────────────────
+
+  const shareDocument = async () => {
+    if (!encryptionResult?.assetId) return;
+    setShareLoading(true);
+    setShareError(null);
+
+    try {
+      const realUserId =
+        localStorage.getItem("pinit_user_id") ||
+        localStorage.getItem("biovault_userId") ||
+        localStorage.getItem("biovault_user_id") ||
+        "USR-UNKNOWN";
+
+      const res = await fetch(`${BACKEND_URL}/resume/share/create`, {
+        method : "POST",
+        headers: { "Content-Type": "application/json" },
+        body   : JSON.stringify({ asset_id: encryptionResult.assetId, user_id: realUserId }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+        throw new Error(err.detail || "Failed to create share link");
+      }
+
+      const data = await res.json();
+      setShareToken(data.share_token);
+    } catch (error) {
+      setShareError(error instanceof Error ? error.message : "Failed to create share link");
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  // ── Copy share link to clipboard ──────────────────────────────────────────
+
+  const copyShareLink = () => {
+    if (!shareToken) return;
+    const url = `${window.location.origin}/shared-view/${shareToken}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2500);
+    });
+  };
+
   // ── Reset (extended to clear new state) ──────────────────────────────────
 
   const resetForm = () => {
@@ -356,6 +410,9 @@ const Encrypt = () => {
     setSelectedFile(null);
     setFileCategory(null);
     setEncryptionResult(null);
+    setShareToken(null);
+    setShareError(null);
+    setShareCopied(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -655,6 +712,68 @@ const Encrypt = () => {
                         <p>Timestamp: {new Date().toISOString()}</p>
                       </div>
                     </div>
+
+                    {/* ── Share link section ─────────────────────────────── */}
+                    {!shareToken ? (
+                      <div className="mb-6">
+                        <button
+                          onClick={shareDocument}
+                          disabled={shareLoading}
+                          className="w-full bg-gradient-to-r from-purple-600 to-cyan-600
+                                     hover:from-purple-700 hover:to-cyan-700
+                                     disabled:opacity-50 text-white px-6 py-3 rounded-lg
+                                     transition-all flex items-center justify-center gap-2 font-semibold"
+                        >
+                          {shareLoading
+                            ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            : <Share2 className="w-4 h-4" />}
+                          {shareLoading ? "Creating Secure Link…" : "Share Resume Securely"}
+                        </button>
+                        {shareError && (
+                          <p className="mt-2 text-xs text-red-400 text-center">{shareError}</p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mb-6 bg-slate-800/60 border border-cyan-700/40 rounded-xl p-4">
+                        <p className="text-xs text-cyan-400 font-semibold mb-2 flex items-center gap-1">
+                          <Share2 className="w-3 h-3" /> Secure Share Link Created
+                        </p>
+                        <div className="flex items-center gap-2 bg-slate-950/60 rounded-lg px-3 py-2 mb-3">
+                          <code className="flex-1 text-xs text-cyan-300 truncate font-mono">
+                            {`${window.location.origin}/shared-view/${shareToken}`}
+                          </code>
+                          <button
+                            onClick={copyShareLink}
+                            className="shrink-0 p-1 hover:bg-slate-700 rounded transition-colors"
+                          >
+                            {shareCopied
+                              ? <CheckCircle className="w-4 h-4 text-green-400" />
+                              : <Copy className="w-4 h-4 text-slate-400" />}
+                          </button>
+                        </div>
+                        <div className="flex gap-2">
+                          <a
+                            href={`/shared-view/${shareToken}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex-1 bg-cyan-700/30 hover:bg-cyan-700/50 border border-cyan-700/40
+                                       text-cyan-300 text-xs font-medium py-2 rounded-lg transition-colors
+                                       flex items-center justify-center gap-1"
+                          >
+                            <ExternalLink className="w-3 h-3" /> Preview
+                          </a>
+                          <button
+                            onClick={() => navigate(`/resume/dashboard/${encryptionResult.assetId}`)}
+                            className="flex-1 bg-purple-700/30 hover:bg-purple-700/50 border border-purple-700/40
+                                       text-purple-300 text-xs font-medium py-2 rounded-lg transition-colors
+                                       flex items-center justify-center gap-1"
+                          >
+                            <BarChart2 className="w-3 h-3" /> Dashboard
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex gap-4 justify-center flex-wrap">
                       <button
                         onClick={downloadDocument}

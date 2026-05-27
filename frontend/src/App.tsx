@@ -12,6 +12,8 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import Home from "./pages/Home";
 import Encrypt from "./pages/Encrypt";
 import DocumentForensics from "./pages/DocumentForensics";
+import SecureResumeViewer from "./pages/SecureResumeViewer";
+import ResumeShareDashboard from "./pages/ResumeShareDashboard";
 
 // ===================== GLOBAL ERROR BOUNDARY =====================
 class ErrorBoundary extends Component<
@@ -202,6 +204,17 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <DocumentForensics />
+                </ProtectedRoute>
+              }
+            />
+            {/* Secure resume viewer — public (token-gated, no login required) */}
+            <Route path="/shared-view/:token" element={<SecureResumeViewer />} />
+            {/* Resume share dashboard — owner only (login required) */}
+            <Route
+              path="/resume/dashboard/:assetId"
+              element={
+                <ProtectedRoute>
+                  <ResumeShareDashboard />
                 </ProtectedRoute>
               }
             />
