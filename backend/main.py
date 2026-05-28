@@ -12,7 +12,8 @@ load_dotenv(env_path)
 
 from routers import auth, vault, pinit_verification
 from routers.vault_share import router as vault_share_router
-from routers.resume_share import router as resume_share_router
+from routers.resume_share    import router as resume_share_router
+from routers.resume_activity import router as resume_activity_router
 from forensic import forensic_router
 from inference import inference_router
 from document_forensics import document_forensics_router
@@ -62,10 +63,13 @@ app.add_middleware(
         "ionic://localhost",
         "file://",
     ],
-    # Regex covers every *.vercel.app preview deploy and *.onrender.com frontends.
+    # Regex covers every *.vercel.app preview deploy, *.onrender.com frontends,
+    # ngrok tunnels (classic *.ngrok.io + new *.ngrok-free.app) for mobile testing.
     allow_origin_regex=(
         r"https://[a-zA-Z0-9\-]+\.vercel\.app"
         r"|https://[a-zA-Z0-9\-]+\.onrender\.com"
+        r"|https://[a-zA-Z0-9\-]+\.ngrok\.io"
+        r"|https://[a-zA-Z0-9\-]+\.ngrok-free\.app"
     ),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
@@ -84,6 +88,9 @@ app.include_router(vault_share_router)
 
 # Register resume secure sharing router (full workflow: share, request access, dashboard)
 app.include_router(resume_share_router)
+
+# Register resume activity / security monitoring router (isolated tracking layer)
+app.include_router(resume_activity_router)
 
 # Register forensic analysis router
 app.include_router(forensic_router)

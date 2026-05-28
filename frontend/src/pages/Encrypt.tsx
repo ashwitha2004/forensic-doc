@@ -565,17 +565,11 @@ const Encrypt = () => {
                     )}
 
                     {/* Hidden file inputs */}
+                    {/* Accept all file types — backend handles MIME validation */}
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept={[
-                        "image/jpeg","image/png","image/webp","image/tiff","image/bmp",
-                        ".jpg",".jpeg",".png",".webp",".tiff",".tif",".bmp",
-                        "application/pdf",".pdf",
-                        "application/msword",".doc",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",".docx",
-                        "text/plain",".txt",
-                      ].join(",")}
+                      accept="*/*"
                       onChange={handleFileUpload}
                       className="hidden"
                     />

@@ -22,10 +22,11 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
+import { useResumeActivityTracker } from "@/hooks/useResumeActivityTracker";
 import {
   Shield, FileText, Eye, EyeOff, Lock, Phone, Mail,
-  AlertCircle, CheckCircle, UserPlus, Clock, X, Send,
-  Building2, MessageSquare, ChevronLeft, ChevronRight,
+  AlertCircle, CheckCircle, UserPlus, Clock,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
 
 // Point pdf.js worker at the bundled copy shipped with pdfjs-dist
@@ -200,6 +201,22 @@ function PdfViewer({ pdfBytes, isApproved }: PdfViewerProps) {
   const canvasRef               = useRef<HTMLCanvasElement>(null);
   const renderTaskRef           = useRef<pdfjsLib.RenderTask | null>(null);
 
+  // Auto-fit scale to container width when doc first loads
+  // so the PDF fills the viewer on any screen size (mobile or desktop)
+  const fitScaleToContainer = useCallback(async (doc: pdfjsLib.PDFDocumentProxy) => {
+    if (!containerRef.current) return;
+    try {
+      const page        = await doc.getPage(1);
+      const naturalVP   = page.getViewport({ scale: 1 });
+      const containerW  = containerRef.current.clientWidth || window.innerWidth;
+      // Leave 32px gutter (16px each side)
+      const fitted = Math.max(0.5, Math.min(3, (containerW - 32) / naturalVP.width));
+      setScale(parseFloat(fitted.toFixed(2)));
+    } catch {
+      // fall back to 1.4 if page read fails
+    }
+  }, []);
+
   // Load PDF document from bytes
   useEffect(() => {
     let cancelled = false;
@@ -210,6 +227,7 @@ function PdfViewer({ pdfBytes, isApproved }: PdfViewerProps) {
           setPdfDoc(doc);
           setNumPages(doc.numPages);
           setPageNum(1);
+          await fitScaleToContainer(doc);
         }
       } catch (e) {
         console.error("[PDFViewer] load error:", e);
@@ -217,7 +235,7 @@ function PdfViewer({ pdfBytes, isApproved }: PdfViewerProps) {
     };
     loadDoc();
     return () => { cancelled = true; };
-  }, [pdfBytes]);
+  }, [pdfBytes, fitScaleToContainer]);
 
   // Render page → then apply contact masking overlay
   // isApproved is a dependency: changing it re-renders the page (masked or clean)
@@ -305,12 +323,7 @@ export default function SecureResumeViewer() {
   const [showText, setShowText] = useState(false);
   const [showMask, setShowMask] = useState(true);
 
-  // Access-request form
-  const [showModal, setShowModal]   = useState(false);
-  const [reqName, setReqName]       = useState("");
-  const [reqEmail, setReqEmail]     = useState("");
-  const [reqCompany, setReqCompany] = useState("");
-  const [reqMessage, setReqMessage] = useState("");
+  // Access-request state (single-click, no form)
   const [reqLoading, setReqLoading] = useState(false);
   const [reqError, setReqError]     = useState<string | null>(null);
 
@@ -350,11 +363,14 @@ export default function SecureResumeViewer() {
         if (isPdf) {
           const buf = await blob.arrayBuffer();
           setPdfBytes(new Uint8Array(buf));
-        } else {
+        } else if (blob.type.startsWith("image/")) {
+          // Only render as <img> for actual image files (PNG, JPG, etc.)
           const url = URL.createObjectURL(blob);
           revoke    = url;
           setImgUrl(url);
         }
+        // else: Word / Office / other non-renderable format — leave pdfBytes
+        // and imgUrl null so the document-placeholder branch is shown instead.
       } catch (e: any) {
         setError(e.message || "Failed to load document");
       } finally {
@@ -391,45 +407,50 @@ export default function SecureResumeViewer() {
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   }, [viewerEmail, checkAccess]);
 
-  // ── Submit access request ──────────────────────────────────────────────────
+  // ── Submit access request — single click, no form ─────────────────────────
+  // Identity is derived from the session ID already stored in sessionStorage.
+  // No manual text entry required from the viewer.
   const submitRequest = async () => {
-    if (!reqName.trim() || !reqEmail.trim()) {
-      setReqError("Name and email are required");
-      return;
-    }
+    if (!token) return;
     setReqLoading(true);
     setReqError(null);
     try {
+      // Derive a stable, unique identifier from the per-token session ID.
+      const sid   = sessionStorage.getItem(`rsv_sid__${token}`) ?? `s${Date.now().toString(36)}`;
+      const clean = sid.replace(/[^a-z0-9]/gi, "").slice(0, 12);
+      const generatedEmail = `viewer-${clean}@pinit.session`;
+
       const res = await fetch(`${BACKEND_URL}/resume/share/request-access`, {
         method : "POST",
         headers: { "Content-Type": "application/json" },
         body   : JSON.stringify({
           token,
-          requester_name   : reqName.trim(),
-          requester_email  : reqEmail.trim().toLowerCase(),
-          requester_company: reqCompany.trim() || undefined,
-          message          : reqMessage.trim() || undefined,
+          requester_name : "Viewer",
+          requester_email: generatedEmail,
         }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Error ${res.status}`);
       }
-      const data       = await res.json();
-      const normEmail  = reqEmail.trim().toLowerCase();
-      if (token) localStorage.setItem(emailKey(token), normEmail);
-      setViewerEmail(normEmail);
+      const data = await res.json();
+      localStorage.setItem(emailKey(token), generatedEmail);
+      setViewerEmail(generatedEmail);
       setAccessResult({ ok: true, approved: false, status: data.status ?? "pending" });
-      setShowModal(false);
     } catch (e: any) {
-      setReqError(e.message || "Failed to submit request");
+      setReqError(e.message || "Failed to send request");
     } finally {
       setReqLoading(false);
     }
   };
 
   // ── Derived state ──────────────────────────────────────────────────────────
+  // Computed before the tracking hook so isApproved can be forwarded to it.
   const isApproved     = accessResult?.approved === true && accessResult.status === "approved";
+
+  // ── Activity tracking — isolated background layer, no UI impact ───────────
+  // isApproved is passed so the hook can trigger geolocation after approval.
+  useResumeActivityTracker(token, viewerEmail, isApproved);
   const maskedFindings = preview?.findings ?? [];
   const emailFindings  = maskedFindings.filter(f => f.type === "email");
   const phoneFindings  = maskedFindings.filter(f => f.type === "phone");
@@ -473,10 +494,11 @@ export default function SecureResumeViewer() {
         </div>
       </header>
 
-      <div className="flex flex-col lg:flex-row h-[calc(100vh-56px)]">
+      {/* On mobile: stacked, scrollable; on desktop: fixed-height side-by-side */}
+      <div className="flex flex-col lg:flex-row lg:h-[calc(100vh-56px)]">
 
         {/* ── Document viewer — now passes isApproved to PdfViewer ──────── */}
-        <div className="flex-1 relative overflow-hidden bg-slate-950">
+        <div className="relative overflow-hidden bg-slate-950 h-[55vh] lg:h-auto lg:flex-1">
           {pdfBytes ? (
             <PdfViewer pdfBytes={pdfBytes} isApproved={isApproved} />
           ) : imgUrl ? (
@@ -485,8 +507,24 @@ export default function SecureResumeViewer() {
                    className="max-w-full max-h-full object-contain rounded" />
             </div>
           ) : (
-            <div className="w-full h-full flex items-center justify-center">
-              <p className="text-slate-500">No preview available</p>
+            /* Word / Office / non-renderable document */
+            <div className="w-full h-full flex flex-col items-center justify-center p-8 gap-5 bg-slate-950">
+              <div className="w-20 h-20 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center">
+                <FileText className="w-10 h-10 text-cyan-400" />
+              </div>
+              <div className="text-center max-w-xs">
+                <p className="text-white font-semibold text-base mb-1 break-all">
+                  {preview?.file_name ?? "Document"}
+                </p>
+                <p className="text-slate-400 text-sm mb-1">
+                  Word document · In-browser preview not supported
+                </p>
+                {preview?.masked_text && (
+                  <p className="text-slate-500 text-xs mt-3">
+                    Text content is available — tap <strong className="text-slate-400">Text Preview</strong> in the panel below.
+                  </p>
+                )}
+              </div>
             </div>
           )}
 
@@ -499,7 +537,7 @@ export default function SecureResumeViewer() {
 
         {/* ── Right info panel — identical to before ────────────────────── */}
         <aside className="w-full lg:w-80 bg-slate-900 border-t lg:border-t-0 lg:border-l
-                          border-slate-800 flex flex-col overflow-y-auto">
+                          border-slate-800 flex flex-col lg:overflow-y-auto">
 
           <div className="p-4 border-b border-slate-800 flex flex-col gap-2">
             <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
@@ -572,12 +610,23 @@ export default function SecureResumeViewer() {
           {maskedFindings.length > 0 && (
             <div className="p-4 border-b border-slate-800">
               {!accessResult && !viewerEmail && (
-                <button onClick={() => setShowModal(true)}
-                        className="w-full bg-cyan-600 hover:bg-cyan-700 text-white text-sm font-medium
-                                   py-2.5 px-4 rounded-lg transition-colors flex items-center justify-center gap-2">
-                  <UserPlus className="w-4 h-4" />
-                  Request Full Contact Info
-                </button>
+                <div className="space-y-2">
+                  <button
+                    onClick={submitRequest}
+                    disabled={reqLoading}
+                    className="w-full bg-cyan-600 hover:bg-cyan-700 disabled:opacity-60 text-white text-sm
+                               font-medium py-2.5 px-4 rounded-lg transition-colors flex items-center
+                               justify-center gap-2"
+                  >
+                    {reqLoading
+                      ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      : <UserPlus className="w-4 h-4" />}
+                    {reqLoading ? "Sending…" : "Request Access"}
+                  </button>
+                  {reqError && (
+                    <p className="text-xs text-red-400 text-center">{reqError}</p>
+                  )}
+                </div>
               )}
               {accessResult?.status === "pending" && (
                 <div className="flex items-center gap-2 bg-yellow-950/30 border border-yellow-700/30 rounded-lg px-3 py-2.5">
@@ -637,74 +686,6 @@ export default function SecureResumeViewer() {
         </aside>
       </div>
 
-      {/* ── Access Request Modal — unchanged ─────────────────────────────── */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl">
-            <div className="flex items-center justify-between p-5 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <UserPlus className="w-5 h-5 text-cyan-400" />
-                <h2 className="text-white font-semibold">Request Full Contact Info</h2>
-              </div>
-              <button onClick={() => { setShowModal(false); setReqError(null); }}
-                      className="text-slate-500 hover:text-white transition-colors">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-5 space-y-4">
-              <p className="text-sm text-slate-400">
-                Your details will be sent to the document owner. You'll receive unmasked contact info once approved.
-              </p>
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Full Name *</label>
-                <input value={reqName} onChange={e => setReqName(e.target.value)} placeholder="Your full name"
-                       className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white
-                                  placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors" />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Email Address *</label>
-                <input type="email" value={reqEmail} onChange={e => setReqEmail(e.target.value)} placeholder="your@email.com"
-                       className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white
-                                  placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors" />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-400 mb-1 flex items-center gap-1">
-                  <Building2 className="w-3 h-3" /> Company / Organization
-                </label>
-                <input value={reqCompany} onChange={e => setReqCompany(e.target.value)} placeholder="Optional"
-                       className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white
-                                  placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors" />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-400 mb-1 flex items-center gap-1">
-                  <MessageSquare className="w-3 h-3" /> Message to Owner
-                </label>
-                <textarea value={reqMessage} onChange={e => setReqMessage(e.target.value)}
-                          placeholder="Why are you requesting contact info? (optional)" rows={3}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white
-                                     placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors resize-none" />
-              </div>
-              {reqError && (
-                <p className="text-xs text-red-400 bg-red-950/30 border border-red-800/30 rounded px-3 py-2">{reqError}</p>
-              )}
-            </div>
-            <div className="p-5 border-t border-slate-800 flex gap-3">
-              <button onClick={() => { setShowModal(false); setReqError(null); }}
-                      className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium py-2.5 rounded-lg transition-colors">
-                Cancel
-              </button>
-              <button onClick={submitRequest} disabled={reqLoading}
-                      className="flex-1 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white text-sm font-medium
-                                 py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2">
-                {reqLoading
-                  ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  : <Send className="w-4 h-4" />}
-                {reqLoading ? "Sending…" : "Send Request"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

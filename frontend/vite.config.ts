@@ -5,17 +5,26 @@ import path from "path";
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
   server: {
-    host: "::",
+    host: "0.0.0.0",
     port: process.env.PORT ? parseInt(process.env.PORT) : 8080,
+    allowedHosts: true,
     hmr: {
       overlay: false,
     },
+    // Proxy all backend routes → local FastAPI (port 8000).
+    // This lets a single ngrok tunnel serve both the Vite frontend AND the API:
+    //   mobile/ngrok  →  port 8080 (Vite)  →  proxy  →  port 8000 (FastAPI)
     proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-        secure: false,
-      },
+      '/api'       : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/vault'     : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/auth'      : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/resume'    : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/pinit'     : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/health'    : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/forensic'  : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/inference' : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/unified'   : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/document'  : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
     },
   },
   plugins: [
