@@ -14,7 +14,13 @@ from routers import auth, vault, pinit_verification
 from routers.vault_share import router as vault_share_router
 from routers.resume_share    import router as resume_share_router
 from routers.resume_activity import router as resume_activity_router
-from routers.share_og        import router as share_og_router
+try:
+    from routers.share_og import router as share_og_router
+    _share_og_ok = True
+except Exception as _e:
+    share_og_router = None
+    _share_og_ok = False
+    print(f"[WARN] share_og router not loaded: {_e}")
 from forensic import forensic_router
 from inference import inference_router
 from document_forensics import document_forensics_router
@@ -94,7 +100,8 @@ app.include_router(resume_share_router)
 app.include_router(resume_activity_router)
 
 # Register Open Graph share card router (OG preview for WhatsApp/LinkedIn/Telegram)
-app.include_router(share_og_router)
+if _share_og_ok and share_og_router is not None:
+    app.include_router(share_og_router)
 
 # Register forensic analysis router
 app.include_router(forensic_router)

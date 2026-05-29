@@ -729,25 +729,15 @@ const Encrypt = () => {
                       </div>
                     ) : (
                       <div className="mb-6 bg-slate-800/60 border border-cyan-700/40 rounded-xl p-4">
-                        {/* Share card link — shows rich preview on WhatsApp/LinkedIn/Telegram */}
-                        <p className="text-xs text-cyan-400 font-semibold mb-1 flex items-center gap-1">
-                          <Share2 className="w-3 h-3" /> Share Link — shows preview card on WhatsApp &amp; LinkedIn
-                        </p>
-                        <p className="text-xs text-slate-500 mb-2">
-                          Copy this link to share. Viewers see a branded card before opening.
+                        <p className="text-xs text-cyan-400 font-semibold mb-2 flex items-center gap-1">
+                          <Share2 className="w-3 h-3" /> Secure Share Link Created
                         </p>
                         <div className="flex items-center gap-2 bg-slate-950/60 rounded-lg px-3 py-2 mb-3">
                           <code className="flex-1 text-xs text-cyan-300 truncate font-mono">
-                            {`${BACKEND_URL}/share/og/${shareToken}`}
+                            {`${window.location.origin}/shared-view/${shareToken}`}
                           </code>
                           <button
-                            onClick={() => {
-                              const url = `${BACKEND_URL}/share/og/${shareToken}`;
-                              navigator.clipboard.writeText(url).then(() => {
-                                setShareCopied(true);
-                                setTimeout(() => setShareCopied(false), 2500);
-                              });
-                            }}
+                            onClick={copyShareLink}
                             className="shrink-0 p-1 hover:bg-slate-700 rounded transition-colors"
                           >
                             {shareCopied
