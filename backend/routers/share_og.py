@@ -26,7 +26,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, Response
 
-from db import get_admin_db
+from db.database import get_admin_db
 
 router = APIRouter()
 
