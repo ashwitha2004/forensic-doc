@@ -149,13 +149,20 @@ export default function ResumeDashboardPage() {
     action   : "approved" | "rejected"
   ) => {
     setResponding(requestId);
+    // Backend expects "approve" / "reject" (not past tense)
+    const apiAction = action === "approved" ? "approve" : "reject";
     try {
-      await fetch(`${BACKEND_URL}/resume/share/respond-request`, {
+      const res = await fetch(`${BACKEND_URL}/resume/share/respond-request`, {
         method : "POST",
         headers: { "Content-Type": "application/json" },
-        body   : JSON.stringify({ request_id: requestId, share_token: token, action, user_id: userId }),
+        body   : JSON.stringify({ request_id: requestId, share_token: token, action: apiAction, user_id: userId }),
       });
-      // Update local state
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error("[ResumeDashboard] respond error:", res.status, err);
+        return;
+      }
+      // Update local state optimistically
       setActivity(prev => {
         if (!prev) return prev;
         return {
@@ -172,6 +179,8 @@ export default function ResumeDashboardPage() {
       if (action === "approved") {
         setTimeout(load, 800);
       }
+    } catch (e) {
+      console.error("[ResumeDashboard] respond exception:", e);
     } finally {
       setResponding(null);
     }
