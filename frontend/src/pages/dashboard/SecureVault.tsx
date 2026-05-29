@@ -331,7 +331,7 @@ export default function SecureVault() {
             <div key={asset.asset_id} className={deleting === asset.asset_id ? "opacity-40 pointer-events-none" : ""}>
               <AssetCard
                 asset={asset}
-                onView={()   => navigate(`/dashboard/sharing/${asset.asset_id}`)}
+                onView={()   => navigate(`/dashboard/resume/${asset.asset_id}`)}
                 onShare={()  => navigate(`/dashboard/sharing?highlight=${asset.asset_id}`)}
                 onDelete={()  => handleDelete(asset.asset_id)}
               />

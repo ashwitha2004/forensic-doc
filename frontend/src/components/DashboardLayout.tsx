@@ -12,21 +12,18 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
-  LayoutDashboard, Database, Share2, Activity,
-  Microscope, Shield, Settings, LogOut, Menu, X,
+  LayoutDashboard, Database,
+  Microscope, Settings, LogOut, Menu, X,
   ChevronRight, Bell,
 } from "lucide-react";
 
 // ─── Nav items ────────────────────────────────────────────────────────────────
 
 const NAV_ITEMS = [
-  { label: "Dashboard",     icon: LayoutDashboard, path: "/dashboard"             },
-  { label: "Secure Vault",  icon: Database,         path: "/dashboard/vault"       },
-  { label: "Sharing Center", icon: Share2,           path: "/dashboard/sharing"     },
-  { label: "Activity",      icon: Activity,         path: "/dashboard/activity"    },
-  { label: "Forensics",     icon: Microscope,       path: "/dashboard/forensics"   },
-  { label: "Security",      icon: Shield,           path: "/dashboard/security"    },
-  { label: "Settings",      icon: Settings,         path: "/dashboard/settings"    },
+  { label: "Dashboard",          icon: LayoutDashboard, path: "/dashboard"           },
+  { label: "Secure Vault",       icon: Database,        path: "/dashboard/vault"     },
+  { label: "Unified Forensics",  icon: Microscope,      path: "/dashboard/forensics" },
+  { label: "Settings",           icon: Settings,        path: "/dashboard/settings"  },
 ];
 
 // ─── Sidebar inner component ──────────────────────────────────────────────────

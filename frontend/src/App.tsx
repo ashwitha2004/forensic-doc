@@ -22,9 +22,6 @@ import DashboardLayout      from "./components/DashboardLayout";
 // ── Dashboard pages ────────────────────────────────────────────────────────
 import DashboardHome        from "./pages/dashboard/DashboardHome";
 import SecureVault          from "./pages/dashboard/SecureVault";
-import SharingCenter        from "./pages/dashboard/SharingCenter";
-import ActivityCenter       from "./pages/dashboard/ActivityCenter";
-import SecurityCenter       from "./pages/dashboard/SecurityCenter";
 import ForensicsCenter      from "./pages/dashboard/ForensicsCenter";
 import SettingsPage         from "./pages/dashboard/SettingsPage";
 
@@ -145,15 +142,12 @@ const App = () => (
               }
             />
 
-            {/* ── Persistent Dashboard ─────────────────────────────────── */}
-            <Route path="/dashboard"            element={<DashPage><DashboardHome   /></DashPage>} />
-            <Route path="/dashboard/vault"      element={<DashPage><SecureVault     /></DashPage>} />
-            <Route path="/dashboard/sharing"             element={<DashPage><SharingCenter        /></DashPage>} />
-            <Route path="/dashboard/sharing/:assetId"  element={<DashPage><ResumeShareDashboard /></DashPage>} />
-            <Route path="/dashboard/activity"   element={<DashPage><ActivityCenter  /></DashPage>} />
-            <Route path="/dashboard/forensics"  element={<DashPage><ForensicsCenter /></DashPage>} />
-            <Route path="/dashboard/security"   element={<DashPage><SecurityCenter  /></DashPage>} />
-            <Route path="/dashboard/settings"   element={<DashPage><SettingsPage    /></DashPage>} />
+            {/* ── Dashboard ────────────────────────────────────────────── */}
+            <Route path="/dashboard"                   element={<DashPage><DashboardHome        /></DashPage>} />
+            <Route path="/dashboard/vault"             element={<DashPage><SecureVault          /></DashPage>} />
+            <Route path="/dashboard/forensics"         element={<DashPage><ForensicsCenter      /></DashPage>} />
+            <Route path="/dashboard/settings"          element={<DashPage><SettingsPage         /></DashPage>} />
+            <Route path="/dashboard/resume/:assetId"   element={<DashPage><ResumeShareDashboard /></DashPage>} />
 
             {/* ── Existing routes — preserved exactly ──────────────────── */}
             <Route
