@@ -1,48 +1,103 @@
 /**
- * DashboardHome
- * =============
- * Overview page: stat cards, recent documents, quick actions, security alerts.
- * Fetches /vault/list and then /resume/share/activity per asset (capped at 10).
+ * DashboardHome — Resume Command Center
+ * =======================================
+ * UI-only reorganization. All data fetching reuses the exact same API
+ * endpoints already used by ActivityCenter and SharingCenter.
+ *
+ * Sections:
+ *  1. Compact action buttons
+ *  2. Quick Security Insights (4 stat cards)
+ *  3. Security Tracking Summary (6 counters from sessions)
+ *  4. Recent Uploaded Resumes (cards with Open Dashboard)
+ *  5. Pending Access Requests (inline approve / reject)
+ *  6. Recent Activity Feed
  */
 
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Database, Share2, AlertTriangle, Eye, Upload,
-  FileText, Clock, Shield, Activity, ArrowRight,
-  CheckCircle, XCircle, TrendingUp, Microscope, BarChart2,
+  Upload, Share2, Microscope, Activity,
+  Eye, Users, AlertTriangle, Clock,
+  Copy, Printer, Camera, CheckCircle, XCircle,
+  FileText, Link2, UserCheck, UserX, RefreshCw,
+  Shield, BarChart2,
 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, format } from "date-fns";
 
 const BACKEND_URL =
   (import.meta as any).env?.VITE_BACKEND_URL ?? "http://localhost:8000";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types ─────────────────────────────────────────────────────────────────────
 
 interface VaultAsset {
-  asset_id   : string;
-  file_name  : string;
-  file_type  : string;
-  file_size  : number;
-  created_at : string;
+  asset_id  : string;
+  file_name : string;
+  file_type : string;
+  file_size : number;
+  created_at: string;
 }
 
-interface ShareActivity {
-  asset_id        : string;
-  total_views     : number;
-  total_requests  : number;
-  pending_requests: number;
-  share_links     : { is_active: boolean }[];
+interface ShareLink {
+  share_token: string;
+  is_active  : boolean;
 }
 
-interface DashStats {
-  totalDocuments : number;
-  activeLinks    : number;
-  pendingRequests: number;
-  totalViews     : number;
+interface AccessRequest {
+  id               : string;
+  share_token      : string;
+  requester_email  : string;
+  requester_name   : string;
+  status           : "pending" | "approved" | "rejected";
+  requested_at     : string;
 }
 
-// ─── Stat card ────────────────────────────────────────────────────────────────
+interface ViewerSession {
+  copy_count        : number;
+  print_attempts    : number;
+  screenshot_signals: number;
+  is_suspicious     : boolean;
+  device_type       : "desktop" | "mobile" | "tablet";
+  viewer_email      : string;
+  first_seen        : string;
+  browser           : string;
+}
+
+interface ResumeCard {
+  asset        : VaultAsset;
+  activeLinks  : number;
+  totalViews   : number;
+  pendingCount : number;
+  totalRequests: number;
+}
+
+interface PendingRow {
+  request  : AccessRequest;
+  fileName : string;
+  assetId  : string;
+}
+
+interface SecurityMetrics {
+  totalViews       : number;
+  totalSessions    : number;
+  suspiciousCount  : number;
+  copyCount        : number;
+  printAttempts    : number;
+  screenshotSignals: number;
+  approvedViewers  : number;
+  activeShared     : number;
+  pendingTotal     : number;
+  alertCount       : number;
+}
+
+interface ActivityEvent {
+  kind   : "view" | "request" | "session";
+  label  : string;
+  sub    : string;
+  time   : string;
+  color  : string;
+}
+
+// ─── Stat card ─────────────────────────────────────────────────────────────────
 
 function StatCard({
   label, value, icon: Icon, color, sublabel,
@@ -53,19 +108,19 @@ function StatCard({
   color   : "cyan" | "green" | "yellow" | "red" | "purple";
   sublabel?: string;
 }) {
-  const colors = {
+  const cfg = {
     cyan  : "from-cyan-500/20 to-cyan-600/10 border-cyan-600/30 text-cyan-400",
     green : "from-green-500/20 to-green-600/10 border-green-600/30 text-green-400",
     yellow: "from-yellow-500/20 to-yellow-600/10 border-yellow-600/30 text-yellow-400",
     red   : "from-red-500/20 to-red-600/10 border-red-600/30 text-red-400",
     purple: "from-purple-500/20 to-purple-600/10 border-purple-600/30 text-purple-400",
   }[color];
-
+  const iconColor = cfg.split(" ").pop()!;
   return (
-    <div className={`bg-gradient-to-br ${colors} border rounded-2xl p-5`}>
+    <div className={`bg-gradient-to-br ${cfg} border rounded-2xl p-5`}>
       <div className="flex items-center justify-between mb-3">
         <p className="text-slate-400 text-xs font-medium uppercase tracking-wider">{label}</p>
-        <Icon className={`w-5 h-5 ${colors.split(" ").pop()}`} />
+        <Icon className={`w-5 h-5 ${iconColor}`} />
       </div>
       <p className="text-3xl font-bold text-white tabular-nums">{value}</p>
       {sublabel && <p className="text-xs text-slate-500 mt-1">{sublabel}</p>}
@@ -73,138 +128,180 @@ function StatCard({
   );
 }
 
-// ─── Recent document row ──────────────────────────────────────────────────────
+// ─── Security counter tile ──────────────────────────────────────────────────────
 
-function DocRow({ asset, onClick }: { asset: VaultAsset; onClick: () => void }) {
-  const ext = asset.file_name.split(".").pop()?.toUpperCase() ?? "FILE";
-  const kb  = Math.round(asset.file_size / 1024);
-
-  return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-3 w-full text-left px-4 py-3 hover:bg-slate-800/50
-                 rounded-xl transition-colors group"
-    >
-      <div className="w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 flex items-center
-                      justify-center shrink-0">
-        <FileText className="w-4 h-4 text-cyan-400" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm text-white font-medium truncate">{asset.file_name}</p>
-        <p className="text-xs text-slate-500">
-          {ext} · {kb > 0 ? `${kb} KB` : "< 1 KB"} ·{" "}
-          {formatDistanceToNow(new Date(asset.created_at), { addSuffix: true })}
-        </p>
-      </div>
-      <ArrowRight className="w-4 h-4 text-slate-600 group-hover:text-slate-400 transition-colors shrink-0" />
-    </button>
-  );
-}
-
-// ─── Quick action card ────────────────────────────────────────────────────────
-
-function QuickAction({
-  icon: Icon, label, description, onClick, color,
+function SecTile({
+  label, value, icon: Icon, color,
 }: {
-  icon       : React.ComponentType<{ className?: string }>;
-  label      : string;
-  description: string;
-  onClick    : () => void;
-  color      : string;
+  label: string;
+  value: number;
+  icon : React.ComponentType<{ className?: string }>;
+  color: string;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className="flex flex-col items-start gap-3 p-5 rounded-2xl bg-slate-900 border
-                 border-slate-800 hover:border-slate-700 text-left transition-all
-                 hover:shadow-lg hover:shadow-slate-900/50 group w-full"
-    >
-      <div className={`w-10 h-10 rounded-xl ${color} flex items-center justify-center
-                       group-hover:scale-110 transition-transform`}>
-        <Icon className="w-5 h-5 text-white" />
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs text-slate-500 uppercase tracking-wider">{label}</p>
+        <Icon className={`w-4 h-4 ${color}`} />
       </div>
-      <div>
-        <p className="text-sm font-semibold text-white mb-0.5">{label}</p>
-        <p className="text-xs text-slate-500">{description}</p>
-      </div>
-    </button>
+      <p className="text-2xl font-bold text-white tabular-nums">{value}</p>
+    </div>
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Main component ─────────────────────────────────────────────────────────────
 
 export default function DashboardHome() {
   const navigate = useNavigate();
   const userId   = localStorage.getItem("biovault_userId") || "";
 
-  const [assets,    setAssets]    = useState<VaultAsset[]>([]);
-  const [stats,     setStats]     = useState<DashStats | null>(null);
-  const [loading,   setLoading]   = useState(true);
-  const [hasSuspicious, setHasSuspicious] = useState(false);
+  const [loading,      setLoading]      = useState(true);
+  const [resumes,      setResumes]      = useState<ResumeCard[]>([]);
+  const [pending,      setPending]      = useState<PendingRow[]>([]);
+  const [metrics,      setMetrics]      = useState<SecurityMetrics | null>(null);
+  const [feed,         setFeed]         = useState<ActivityEvent[]>([]);
+  const [responding,   setResponding]   = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!userId) return;
     setLoading(true);
     try {
-      // 1. Fetch vault list
-      const vaultRes = await fetch(`${BACKEND_URL}/vault/list?user_id=${encodeURIComponent(userId)}`);
-      const vaultData = vaultRes.ok ? await vaultRes.json() : { assets: [], total: 0 };
-      const vaultAssets: VaultAsset[] = vaultData.assets ?? [];
-      setAssets(vaultAssets);
+      // 1. Vault assets
+      const vr = await fetch(`${BACKEND_URL}/vault/list?user_id=${encodeURIComponent(userId)}`);
+      if (!vr.ok) { setLoading(false); return; }
+      const { assets }: { assets: VaultAsset[] } = await vr.json();
 
-      // 2. Fetch share activity for up to 10 most recent assets
-      const toCheck = vaultAssets.slice(0, 10);
-      const activities: ShareActivity[] = [];
+      // 2. Share activity + sessions per asset (parallel)
+      const resumeCards  : ResumeCard[]     = [];
+      const pendingRows  : PendingRow[]     = [];
+      const feedEvents   : ActivityEvent[]  = [];
+
+      let totalViews        = 0;
+      let totalSessions     = 0;
+      let suspiciousCount   = 0;
+      let copyCount         = 0;
+      let printAttempts     = 0;
+      let screenshotSignals = 0;
+      let approvedViewers   = 0;
+      let activeShared      = 0;
+      let pendingTotal      = 0;
 
       await Promise.allSettled(
-        toCheck.map(async (a) => {
+        assets.map(async (asset) => {
+          // share/activity
           try {
             const r = await fetch(
-              `${BACKEND_URL}/resume/share/activity/${a.asset_id}?user_id=${encodeURIComponent(userId)}`
+              `${BACKEND_URL}/resume/share/activity/${asset.asset_id}?user_id=${encodeURIComponent(userId)}`
             );
             if (r.ok) {
               const d = await r.json();
-              activities.push({ asset_id: a.asset_id, ...d });
+              const links    : ShareLink[]     = d.share_links ?? [];
+              const requests : AccessRequest[] = d.requests    ?? [];
+              const views                      = d.views       ?? [];
+              const active   = links.filter((l: ShareLink) => l.is_active).length;
+              const pc       = requests.filter((rq: AccessRequest) => rq.status === "pending").length;
+              const approved = requests.filter((rq: AccessRequest) => rq.status === "approved").length;
+
+              totalViews   += d.total_views      ?? 0;
+              pendingTotal += pc;
+              approvedViewers += approved;
+              if (active > 0) activeShared++;
+
+              resumeCards.push({
+                asset,
+                activeLinks  : active,
+                totalViews   : d.total_views   ?? 0,
+                pendingCount : pc,
+                totalRequests: requests.length,
+              });
+
+              // pending rows
+              requests.filter((rq: AccessRequest) => rq.status === "pending").forEach(rq => {
+                pendingRows.push({ request: rq, fileName: asset.file_name, assetId: asset.asset_id });
+              });
+
+              // feed: views
+              views.slice(0, 3).forEach((v: any) => {
+                feedEvents.push({
+                  kind : "view",
+                  label: "Resume opened",
+                  sub  : `${asset.file_name} · ${v.viewer_ip || "unknown"}`,
+                  time : v.viewed_at,
+                  color: "text-cyan-400",
+                });
+              });
+
+              // feed: requests
+              requests.slice(0, 2).forEach((rq: AccessRequest) => {
+                feedEvents.push({
+                  kind : "request",
+                  label: rq.status === "pending" ? "Access requested" :
+                         rq.status === "approved" ? "Access approved"  : "Access rejected",
+                  sub  : `${asset.file_name} · ${rq.requester_email}`,
+                  time : rq.requested_at,
+                  color: rq.status === "approved" ? "text-green-400" :
+                         rq.status === "rejected"  ? "text-red-400"   : "text-yellow-400",
+                });
+              });
             }
-          } catch {
-            // ignore per-asset fetch failures
-          }
+          } catch { /* ignore */ }
+
+          // viewer sessions (security metrics)
+          try {
+            const r = await fetch(
+              `${BACKEND_URL}/resume/activity/sessions/${asset.asset_id}?user_id=${encodeURIComponent(userId)}`
+            );
+            if (r.ok) {
+              const d = await r.json();
+              const sessions: ViewerSession[] = d.sessions ?? [];
+              totalSessions += sessions.length;
+              for (const s of sessions) {
+                copyCount         += s.copy_count         ?? 0;
+                printAttempts     += s.print_attempts     ?? 0;
+                screenshotSignals += s.screenshot_signals ?? 0;
+                if (s.is_suspicious) suspiciousCount++;
+              }
+              // feed: sessions
+              sessions.slice(0, 2).forEach(s => {
+                feedEvents.push({
+                  kind : "session",
+                  label: s.is_suspicious ? "Suspicious session" : "Session started",
+                  sub  : `${asset.file_name} · ${s.viewer_email || "anonymous"} · ${s.browser || ""}`,
+                  time : s.first_seen,
+                  color: s.is_suspicious ? "text-red-400" : "text-blue-400",
+                });
+              });
+            }
+          } catch { /* ignore */ }
         })
       );
 
-      // 3. Aggregate stats
-      let activeLinks     = 0;
-      let pendingRequests = 0;
-      let totalViews      = 0;
-      let suspicious      = false;
+      // Sort resume cards: pending first, then by views
+      resumeCards.sort((a, b) => b.pendingCount - a.pendingCount || b.totalViews - a.totalViews);
+      // Sort feed by time desc
+      feedEvents.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+      // Sort pending by date desc
+      pendingRows.sort((a, b) =>
+        new Date(b.request.requested_at).getTime() - new Date(a.request.requested_at).getTime()
+      );
 
-      for (const act of activities) {
-        activeLinks     += (act.share_links ?? []).filter(l => l.is_active).length;
-        pendingRequests += act.pending_requests ?? 0;
-        totalViews      += act.total_views ?? 0;
-      }
-
-      // 4. Check for suspicious sessions (best-effort)
-      try {
-        for (const a of toCheck.slice(0, 5)) {
-          const r = await fetch(
-            `${BACKEND_URL}/resume/activity/sessions/${a.asset_id}?user_id=${encodeURIComponent(userId)}`
-          );
-          if (r.ok) {
-            const d = await r.json();
-            if ((d.sessions ?? []).some((s: any) => s.is_suspicious)) {
-              suspicious = true;
-              break;
-            }
-          }
-        }
-      } catch { /* best-effort */ }
-
-      setStats({ totalDocuments: vaultAssets.length, activeLinks, pendingRequests, totalViews });
-      setHasSuspicious(suspicious);
+      setResumes(resumeCards);
+      setPending(pendingRows);
+      setFeed(feedEvents.slice(0, 20));
+      setMetrics({
+        totalViews,
+        totalSessions,
+        suspiciousCount,
+        copyCount,
+        printAttempts,
+        screenshotSignals,
+        approvedViewers,
+        activeShared,
+        pendingTotal,
+        alertCount: suspiciousCount,
+      });
     } catch (e) {
       console.error("[DashboardHome] load error:", e);
-      setStats({ totalDocuments: 0, activeLinks: 0, pendingRequests: 0, totalViews: 0 });
     } finally {
       setLoading(false);
     }
@@ -212,53 +309,117 @@ export default function DashboardHome() {
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Loading skeleton ──────────────────────────────────────────────────────
+  const handleRespond = useCallback(async (
+    requestId: string,
+    token    : string,
+    action   : "approved" | "rejected"
+  ) => {
+    setResponding(requestId);
+    try {
+      await fetch(`${BACKEND_URL}/resume/share/respond-request`, {
+        method : "POST",
+        headers: { "Content-Type": "application/json" },
+        body   : JSON.stringify({ request_id: requestId, share_token: token, action, user_id: userId }),
+      });
+      setPending(prev => prev.filter(p => p.request.id !== requestId));
+      setMetrics(m => m ? { ...m, pendingTotal: Math.max(0, m.pendingTotal - 1) } : m);
+    } catch (e) {
+      console.error("[DashboardHome] respond error:", e);
+    } finally {
+      setResponding(null);
+    }
+  }, [userId]);
+
+  // ── Loading skeleton ──────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="space-y-6 animate-pulse">
-        <div className="h-8 w-64 bg-slate-800 rounded-xl" />
+        <div className="h-8 w-72 bg-slate-800 rounded-xl" />
+        <div className="flex gap-2">
+          {[...Array(4)].map((_, i) => <div key={i} className="h-9 w-36 bg-slate-800 rounded-xl" />)}
+        </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-28 bg-slate-800 rounded-2xl" />
-          ))}
+          {[...Array(4)].map((_, i) => <div key={i} className="h-28 bg-slate-800 rounded-2xl" />)}
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="h-64 bg-slate-800 rounded-2xl" />
-          <div className="h-64 bg-slate-800 rounded-2xl" />
+          <div className="h-72 bg-slate-800 rounded-2xl" />
+          <div className="h-72 bg-slate-800 rounded-2xl" />
         </div>
       </div>
     );
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  const m = metrics ?? {
+    totalViews: 0, totalSessions: 0, suspiciousCount: 0,
+    copyCount: 0, printAttempts: 0, screenshotSignals: 0,
+    approvedViewers: 0, activeShared: 0, pendingTotal: 0, alertCount: 0,
+  };
+
   return (
     <div className="space-y-8 text-white">
 
-      {/* Page title */}
-      <div className="flex items-center justify-between">
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Shield className="w-6 h-6 text-cyan-400" /> Resume Command Center
+          </h1>
           <p className="text-slate-400 text-sm mt-0.5">
             Welcome back, <span className="text-cyan-400 font-mono">{userId}</span>
           </p>
         </div>
         <button
           onClick={load}
-          className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-3 py-1.5
-                     bg-slate-800 rounded-lg border border-slate-700"
+          className="flex items-center gap-2 px-3 py-2 bg-slate-800 border border-slate-700
+                     rounded-xl text-slate-400 hover:text-white text-sm transition-colors self-start"
         >
-          Refresh
+          <RefreshCw className="w-4 h-4" /> Refresh
         </button>
       </div>
 
-      {/* Security alert banner */}
-      {hasSuspicious && (
+      {/* ── Compact action buttons ──────────────────────────────────────────── */}
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => navigate("/encrypt")}
+          className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-700
+                     text-white text-sm font-medium rounded-xl transition-colors"
+        >
+          <Upload className="w-4 h-4" /> Upload &amp; Encrypt
+        </button>
+        <button
+          onClick={() => navigate("/dashboard/sharing")}
+          className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700
+                     border border-slate-700 text-slate-300 hover:text-white text-sm
+                     font-medium rounded-xl transition-colors"
+        >
+          <Share2 className="w-4 h-4" /> Manage Sharing
+        </button>
+        <button
+          onClick={() => navigate("/dashboard/forensics")}
+          className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700
+                     border border-slate-700 text-slate-300 hover:text-white text-sm
+                     font-medium rounded-xl transition-colors"
+        >
+          <Microscope className="w-4 h-4" /> Unified Forensics
+        </button>
+        <button
+          onClick={() => navigate("/dashboard/activity")}
+          className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700
+                     border border-slate-700 text-slate-300 hover:text-white text-sm
+                     font-medium rounded-xl transition-colors"
+        >
+          <BarChart2 className="w-4 h-4" /> Activity
+        </button>
+      </div>
+
+      {/* ── Alerts ─────────────────────────────────────────────────────────── */}
+      {m.alertCount > 0 && (
         <div className="flex items-center gap-3 bg-red-950/30 border border-red-700/40
                         rounded-2xl px-5 py-4">
           <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
           <div className="flex-1">
             <p className="text-sm font-semibold text-red-300">Suspicious activity detected</p>
-            <p className="text-xs text-red-400/70">One or more sessions have been flagged. Review Security Center.</p>
+            <p className="text-xs text-red-400/70">One or more sessions flagged. Review Security Center.</p>
           </div>
           <button
             onClick={() => navigate("/dashboard/security")}
@@ -269,17 +430,15 @@ export default function DashboardHome() {
           </button>
         </div>
       )}
-
-      {/* Pending requests banner */}
-      {(stats?.pendingRequests ?? 0) > 0 && (
+      {m.pendingTotal > 0 && (
         <div className="flex items-center gap-3 bg-yellow-950/30 border border-yellow-700/40
                         rounded-2xl px-5 py-4">
           <Clock className="w-5 h-5 text-yellow-400 shrink-0 animate-pulse" />
           <div className="flex-1">
             <p className="text-sm font-semibold text-yellow-300">
-              {stats!.pendingRequests} pending access request{stats!.pendingRequests > 1 ? "s" : ""}
+              {m.pendingTotal} pending access request{m.pendingTotal > 1 ? "s" : ""}
             </p>
-            <p className="text-xs text-yellow-400/70">Viewers are waiting for approval to see contact info.</p>
+            <p className="text-xs text-yellow-400/70">Viewers waiting for approval to see contact info.</p>
           </div>
           <button
             onClick={() => navigate("/dashboard/sharing")}
@@ -291,40 +450,54 @@ export default function DashboardHome() {
         </div>
       )}
 
-      {/* Stat cards */}
+      {/* ── Quick Security Insights (4 cards) ──────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          label="Documents"     value={stats?.totalDocuments ?? 0}
-          icon={Database}       color="cyan"
-          sublabel="Encrypted & stored"
+          label="Active Shared Resumes" value={m.activeShared}
+          icon={Share2}                 color="cyan"
+          sublabel="With active links"
         />
         <StatCard
-          label="Share Links"   value={stats?.activeLinks ?? 0}
-          icon={Share2}         color="green"
-          sublabel="Active links"
+          label="Pending Requests"      value={m.pendingTotal}
+          icon={Clock}                  color="yellow"
+          sublabel="Awaiting your review"
         />
         <StatCard
-          label="Pending"       value={stats?.pendingRequests ?? 0}
-          icon={Clock}          color="yellow"
-          sublabel="Access requests"
+          label="Approved Viewers"      value={m.approvedViewers}
+          icon={Users}                  color="green"
+          sublabel="Granted contact access"
         />
         <StatCard
-          label="Total Views"   value={stats?.totalViews ?? 0}
-          icon={Eye}            color="purple"
-          sublabel="Across all shares"
+          label="Security Alerts"       value={m.alertCount}
+          icon={AlertTriangle}          color={m.alertCount > 0 ? "red" : "purple"}
+          sublabel={m.alertCount > 0 ? "Review required" : "All clear"}
         />
       </div>
 
-      {/* Main grid: Recent docs + Quick actions */}
+      {/* ── Security Tracking Summary (6 tiles) ────────────────────────────── */}
+      <div>
+        <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+          <Activity className="w-4 h-4 text-cyan-400" /> Security Tracking Summary
+        </h2>
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+          <SecTile label="Total Views"     value={m.totalViews}        icon={Eye}           color="text-cyan-400"   />
+          <SecTile label="Viewer Sessions" value={m.totalSessions}     icon={Users}         color="text-blue-400"   />
+          <SecTile label="Suspicious"      value={m.suspiciousCount}   icon={AlertTriangle} color="text-red-400"    />
+          <SecTile label="Copy Attempts"   value={m.copyCount}         icon={Copy}          color="text-orange-400" />
+          <SecTile label="Print Attempts"  value={m.printAttempts}     icon={Printer}       color="text-orange-400" />
+          <SecTile label="Screenshot Sigs" value={m.screenshotSignals} icon={Camera}        color="text-red-400"    />
+        </div>
+      </div>
+
+      {/* ── Main grid: Resumes + Pending requests ──────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-        {/* Recent documents */}
+        {/* Recent Uploaded Resumes */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Database className="w-4 h-4 text-cyan-400" />
-              <h2 className="text-sm font-semibold text-white">Recent Documents</h2>
-            </div>
+            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+              <FileText className="w-4 h-4 text-cyan-400" /> Recent Uploaded Resumes
+            </h2>
             <button
               onClick={() => navigate("/dashboard/vault")}
               className="text-xs text-cyan-500 hover:text-cyan-400 transition-colors"
@@ -333,136 +506,169 @@ export default function DashboardHome() {
             </button>
           </div>
 
-          {assets.length === 0 ? (
+          {resumes.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 gap-3">
-              <Database className="w-8 h-8 text-slate-700" />
-              <p className="text-slate-500 text-sm">No documents yet</p>
+              <FileText className="w-8 h-8 text-slate-700" />
+              <p className="text-slate-500 text-sm">No shared resumes yet</p>
               <button
                 onClick={() => navigate("/encrypt")}
                 className="text-xs text-cyan-500 hover:text-cyan-400 transition-colors"
               >
-                Upload your first document →
+                Upload &amp; encrypt your first document →
               </button>
             </div>
           ) : (
-            <div className="divide-y divide-slate-800/50 px-2 py-2">
-              {assets.slice(0, 6).map(a => (
-                <DocRow
-                  key={a.asset_id}
-                  asset={a}
-                  onClick={() => navigate(`/resume/dashboard/${a.asset_id}`)}
-                />
+            <div className="divide-y divide-slate-800/50">
+              {resumes.slice(0, 6).map(rc => (
+                <div key={rc.asset.asset_id} className="px-5 py-3.5">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700
+                                    flex items-center justify-center shrink-0 mt-0.5">
+                      <FileText className="w-4 h-4 text-cyan-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-white truncate">{rc.asset.file_name}</p>
+                      <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-slate-500">
+                        <span>
+                          {formatDistanceToNow(new Date(rc.asset.created_at), { addSuffix: true })}
+                        </span>
+                        <span className="flex items-center gap-0.5">
+                          <Link2 className="w-3 h-3" /> {rc.activeLinks} link{rc.activeLinks !== 1 ? "s" : ""}
+                        </span>
+                        <span className="flex items-center gap-0.5">
+                          <Eye className="w-3 h-3" /> {rc.totalViews} view{rc.totalViews !== 1 ? "s" : ""}
+                        </span>
+                        {rc.pendingCount > 0 && (
+                          <span className="flex items-center gap-0.5 text-yellow-400">
+                            <Clock className="w-3 h-3 animate-pulse" /> {rc.pendingCount} pending
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => navigate(`/dashboard/sharing/${rc.asset.asset_id}`)}
+                    className="mt-2.5 w-full text-xs flex items-center justify-center gap-1.5
+                               px-3 py-2 bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-600/25
+                               text-cyan-400 hover:text-cyan-300 rounded-xl transition-all font-medium"
+                  >
+                    <Share2 className="w-3 h-3" /> Open Dashboard
+                  </button>
+                </div>
               ))}
             </div>
           )}
         </div>
 
-        {/* Quick actions + Security overview */}
-        <div className="space-y-6">
-          <div>
-            <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-cyan-400" /> Quick Actions
+        {/* Pending Access Requests */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+              <Clock className="w-4 h-4 text-yellow-400" /> Pending Access Requests
+              {pending.length > 0 && (
+                <span className="text-xs bg-yellow-900/40 text-yellow-400 border border-yellow-700/30
+                                 px-2 py-0.5 rounded-full">{pending.length}</span>
+              )}
             </h2>
-            <div className="grid grid-cols-1 gap-3">
-              <QuickAction
-                icon={Upload}      color="bg-cyan-600"
-                label="Upload & Encrypt"
-                description="Securely encrypt a new document or image"
-                onClick={() => navigate("/encrypt")}
-              />
-              <QuickAction
-                icon={Share2}      color="bg-blue-600"
-                label="Manage Sharing"
-                description="View links, approve requests, revoke access"
-                onClick={() => navigate("/dashboard/sharing")}
-              />
-              <QuickAction
-                icon={Microscope}  color="bg-purple-600"
-                label="Run Forensics"
-                description="Detect manipulation, check AI generation"
-                onClick={() => navigate("/dashboard/forensics")}
-              />
-              <QuickAction
-                icon={BarChart2}   color="bg-emerald-700"
-                label="Resume Share Analytics"
-                description="View links, requests, approvals & session tracking per document"
-                onClick={() => navigate("/dashboard/sharing")}
-              />
-            </div>
-          </div>
-
-          {/* Security status */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <Shield className="w-4 h-4 text-cyan-400" />
-              <h2 className="text-sm font-semibold text-white">Security Status</h2>
-            </div>
-            <div className="space-y-3">
-              <SecurityLine
-                label="End-to-end encryption"
-                status="active"
-                detail="AES-256-GCM"
-              />
-              <SecurityLine
-                label="Activity tracking"
-                status="active"
-                detail="All views logged"
-              />
-              <SecurityLine
-                label="Suspicious sessions"
-                status={hasSuspicious ? "warning" : "ok"}
-                detail={hasSuspicious ? "Review required" : "None detected"}
-              />
-              <SecurityLine
-                label="Pending approvals"
-                status={(stats?.pendingRequests ?? 0) > 0 ? "warning" : "ok"}
-                detail={
-                  (stats?.pendingRequests ?? 0) > 0
-                    ? `${stats!.pendingRequests} waiting`
-                    : "All clear"
-                }
-              />
-            </div>
             <button
-              onClick={() => navigate("/dashboard/security")}
-              className="mt-4 w-full text-xs text-slate-400 hover:text-white py-2 px-3
-                         bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors
-                         flex items-center justify-center gap-2"
+              onClick={() => navigate("/dashboard/sharing")}
+              className="text-xs text-cyan-500 hover:text-cyan-400 transition-colors"
             >
-              <Activity className="w-3 h-3" /> Full Security Report
+              Sharing Center →
             </button>
           </div>
+
+          {pending.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-2">
+              <CheckCircle className="w-8 h-8 text-green-600" />
+              <p className="text-slate-500 text-sm">No pending requests</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-800/50 max-h-96 overflow-y-auto">
+              {pending.map(row => (
+                <div
+                  key={row.request.id}
+                  className={`px-5 py-3.5 transition-opacity ${
+                    responding === row.request.id ? "opacity-40 pointer-events-none" : ""
+                  }`}
+                >
+                  <div className="flex items-start gap-3 mb-2.5">
+                    <Clock className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5 animate-pulse" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-mono text-slate-300 truncate">
+                        {row.request.requester_email}
+                      </p>
+                      <p className="text-xs text-slate-500 truncate mt-0.5">{row.fileName}</p>
+                      <p className="text-xs text-slate-600">
+                        {formatDistanceToNow(new Date(row.request.requested_at), { addSuffix: true })}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleRespond(row.request.id, row.request.share_token, "approved")}
+                      className="flex-1 flex items-center justify-center gap-1 py-2 px-3
+                                 bg-green-600/20 hover:bg-green-600/40 border border-green-600/30
+                                 text-green-400 text-xs font-medium rounded-xl transition-colors"
+                    >
+                      <UserCheck className="w-3.5 h-3.5" /> Approve
+                    </button>
+                    <button
+                      onClick={() => handleRespond(row.request.id, row.request.share_token, "rejected")}
+                      className="flex-1 flex items-center justify-center gap-1 py-2 px-3
+                                 bg-red-600/10 hover:bg-red-600/25 border border-red-600/20
+                                 text-red-400 text-xs font-medium rounded-xl transition-colors"
+                    >
+                      <UserX className="w-3.5 h-3.5" /> Reject
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
-    </div>
-  );
-}
 
-// ─── Security line helper ─────────────────────────────────────────────────────
+      {/* ── Recent Activity Feed ────────────────────────────────────────────── */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+            <Activity className="w-4 h-4 text-cyan-400" /> Recent Activity Feed
+          </h2>
+          <button
+            onClick={() => navigate("/dashboard/activity")}
+            className="text-xs text-cyan-500 hover:text-cyan-400 transition-colors"
+          >
+            Full Activity Center →
+          </button>
+        </div>
 
-function SecurityLine({
-  label, status, detail,
-}: {
-  label : string;
-  status: "active" | "ok" | "warning" | "error";
-  detail: string;
-}) {
-  const icon =
-    status === "active" || status === "ok"
-      ? <CheckCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />
-      : status === "warning"
-      ? <AlertTriangle className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
-      : <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />;
+        {feed.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 gap-2">
+            <Activity className="w-8 h-8 text-slate-700" />
+            <p className="text-slate-500 text-sm">No activity yet</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-800/60">
+            {feed.slice(0, 12).map((ev, i) => (
+              <div key={i} className="flex items-center gap-4 px-5 py-3 hover:bg-slate-800/30 transition-colors">
+                <div className={`w-2 h-2 rounded-full shrink-0 ${ev.color.replace("text-","bg-")}`} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-xs font-medium ${ev.color}`}>{ev.label}</p>
+                  <p className="text-xs text-slate-500 truncate mt-0.5">{ev.sub}</p>
+                </div>
+                <span className="text-xs text-slate-600 shrink-0">
+                  {(() => {
+                    try { return format(new Date(ev.time), "MMM d HH:mm"); }
+                    catch { return "—"; }
+                  })()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-  return (
-    <div className="flex items-center gap-2.5 text-xs">
-      {icon}
-      <span className="text-slate-300 flex-1">{label}</span>
-      <span className={`text-xs font-mono ${
-        status === "warning" ? "text-yellow-400" :
-        status === "error"   ? "text-red-400" :
-                               "text-green-400"
-      }`}>{detail}</span>
     </div>
   );
 }
