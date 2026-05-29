@@ -38,9 +38,10 @@
 
 import { useEffect, useRef } from "react";
 
-const BACKEND_URL       = (import.meta as any).env?.VITE_BACKEND_URL || "http://localhost:8000";
-const FLUSH_INTERVAL_MS = 15_000;   // batch-send every 15 s
-const FLUSH_BATCH_SIZE  = 10;       // or when queue reaches 10 events
+const BACKEND_URL        = (import.meta as any).env?.VITE_BACKEND_URL || "http://localhost:8000";
+const FLUSH_INTERVAL_MS  = 15_000;  // batch-send events every 15 s
+const FLUSH_BATCH_SIZE   = 10;      // or when queue reaches 10 events
+const SESSION_LIVE_MS    = 30_000;  // push live duration+counters every 30 s
 
 type TrackEvent = {
   event_type   : string;
@@ -300,6 +301,24 @@ export function useResumeActivityTracker(
       referrer      : document.referrer || null,
     });
 
+    // ── Immediate security counter flush ─────────────────────────────────
+    const pushSecurityUpdate = () => {
+      const hasSuspiciousEvents =
+        screenshotSignals > 0 || copyCount > 5 || printAttempts > 0;
+      _upsertSession({
+        action            : "end",
+        share_token       : token,
+        session_id        : sessionId,
+        viewer_email      : emailRef.current || undefined,
+        total_duration_ms : Date.now() - startMs,
+        copy_count        : copyCount,
+        print_attempts    : printAttempts,
+        screenshot_signals: screenshotSignals,
+        is_suspicious     : hasSuspiciousEvents,
+        last_seen         : new Date().toISOString(),
+      });
+    };
+
     // ── Copy / text-selection ─────────────────────────────────────────────
     const onCopy = (): void => {
       copyCount++;
@@ -307,6 +326,7 @@ export function useResumeActivityTracker(
         count         : copyCount,
         selected_chars: window.getSelection()?.toString().length ?? 0,
       });
+      pushSecurityUpdate();
     };
 
     const onMouseUp = (): void => {
@@ -324,6 +344,7 @@ export function useResumeActivityTracker(
         e.preventDefault();
         printAttempts++;
         push("print_attempt", { method: "Ctrl+P" });
+        pushSecurityUpdate();
         return;
       }
       if (ctrl && e.key === "s")  {
@@ -340,12 +361,14 @@ export function useResumeActivityTracker(
       // Screenshot signals
       if (e.key === "PrintScreen") {
         screenshotSignals++;
-        push("screenshot_signal", { method: "PrintScreen" });
+        push("screenshot_signal", { method: e.metaKey || e.ctrlKey ? "Win+PrtScn" : "PrintScreen" });
+        pushSecurityUpdate();
         return;
       }
       if (e.metaKey && e.shiftKey && ["3", "4", "5"].includes(e.key)) {
         screenshotSignals++;
         push("screenshot_signal", { method: `Cmd+Shift+${e.key}` });
+        pushSecurityUpdate();
         return;
       }
 
@@ -367,6 +390,7 @@ export function useResumeActivityTracker(
     const onBeforePrint = (): void => {
       printAttempts++;
       push("print_attempt", { method: "browser_print_dialog" });
+      pushSecurityUpdate();
     };
 
     // ── Visibility ────────────────────────────────────────────────────────
@@ -462,6 +486,30 @@ export function useResumeActivityTracker(
     window  .addEventListener("beforeunload",     onUnload);
 
     timerHandle = setInterval(flush, FLUSH_INTERVAL_MS);
+
+    // ── Live session update every 30 s ─────────────────────────────────────
+    // Writes current duration + security counters while viewer is still on page,
+    // so the owner dashboard shows live data without waiting for session_end.
+    const liveTimer = setInterval(() => {
+      if (isVisible) activeMs += Date.now() - activeFrom;
+      activeFrom = Date.now();
+      const hasSuspiciousEvents =
+        screenshotSignals > 0 || copyCount > 5 || printAttempts > 0;
+      _upsertSession({
+        action            : "end",
+        share_token       : token,
+        session_id        : sessionId,
+        viewer_email      : emailRef.current || undefined,
+        total_duration_ms : Date.now() - startMs,
+        active_duration_ms: activeMs,
+        copy_count        : copyCount,
+        print_attempts    : printAttempts,
+        screenshot_signals: screenshotSignals,
+        is_suspicious     : hasSuspiciousEvents,
+        last_seen         : new Date().toISOString(),
+      });
+    }, SESSION_LIVE_MS);
+
     onResize(); // immediate devtools check on load
 
     return () => {
@@ -476,6 +524,7 @@ export function useResumeActivityTracker(
       window  .removeEventListener("resize",           onResize);
       window  .removeEventListener("beforeunload",     onUnload);
       if (timerHandle) clearInterval(timerHandle);
+      clearInterval(liveTimer);
       // Flush any remaining queued events + send final session state
       onUnload();
     };
