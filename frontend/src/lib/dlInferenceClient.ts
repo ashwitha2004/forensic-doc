@@ -18,7 +18,7 @@
 const BACKEND_BASE_URL: string =
   (import.meta as any).env?.VITE_BACKEND_URL ||
   (typeof window !== "undefined" && window.location.hostname === "localhost"
-    ? "http://localhost:8000"
+    ? ""
     : "");
 
 const DETECT_ENDPOINT = `${BACKEND_BASE_URL}/api/inference/detect-ai-base64`;
