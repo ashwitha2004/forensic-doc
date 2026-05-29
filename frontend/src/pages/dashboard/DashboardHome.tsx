@@ -186,9 +186,14 @@ export default function DashboardHome() {
       let activeShared      = 0;
       let pendingTotal      = 0;
 
+      // Pre-populate resumeCards with ALL vault assets — never gated on share activity
+      for (const asset of assets) {
+        resumeCards.push({ asset, activeLinks: 0, totalViews: 0, pendingCount: 0, totalRequests: 0 });
+      }
+
       await Promise.allSettled(
-        assets.map(async (asset) => {
-          // share/activity
+        assets.map(async (asset, idx) => {
+          // share/activity — enrich the already-added resumeCard
           try {
             const r = await fetch(
               `${BACKEND_URL}/resume/share/activity/${asset.asset_id}?user_id=${encodeURIComponent(userId)}`
@@ -202,18 +207,19 @@ export default function DashboardHome() {
               const pc       = requests.filter((rq: AccessRequest) => rq.status === "pending").length;
               const approved = requests.filter((rq: AccessRequest) => rq.status === "approved").length;
 
-              totalViews   += d.total_views      ?? 0;
-              pendingTotal += pc;
+              totalViews      += d.total_views ?? 0;
+              pendingTotal    += pc;
               approvedViewers += approved;
               if (active > 0) activeShared++;
 
-              resumeCards.push({
+              // Enrich the pre-added card
+              resumeCards[idx] = {
                 asset,
                 activeLinks  : active,
-                totalViews   : d.total_views   ?? 0,
+                totalViews   : d.total_views ?? 0,
                 pendingCount : pc,
                 totalRequests: requests.length,
-              });
+              };
 
               // pending rows
               requests.filter((rq: AccessRequest) => rq.status === "pending").forEach(rq => {
