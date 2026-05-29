@@ -10,7 +10,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  FileText, Eye, Clock, Upload, RefreshCw, Link2, Share2,
+  FileText, Eye, Clock, Upload, RefreshCw, Link2, Share2, Trash2,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -42,6 +42,21 @@ export default function DashboardHome() {
 
   const [cards,   setCards]   = useState<ResumeCard[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const handleDelete = async (assetId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm("Delete this document? This cannot be undone.")) return;
+    setDeleting(assetId);
+    try {
+      await fetch(`${BACKEND_URL}/vault/${assetId}?user_id=${encodeURIComponent(userId)}`, {
+        method: "DELETE",
+      });
+      setCards(prev => prev.filter(c => c.asset.asset_id !== assetId));
+    } catch { /* ignore */ } finally {
+      setDeleting(null);
+    }
+  };
 
   const load = useCallback(async () => {
     if (!userId) return;
@@ -148,12 +163,15 @@ export default function DashboardHome() {
       ) : (
         <div className="space-y-3">
           {cards.map(rc => (
-            <button
+            <div
               key={rc.asset.asset_id}
+              className={`bg-slate-900 border border-slate-800 hover:border-slate-600
+                         rounded-2xl px-5 py-4 flex items-center gap-4
+                         transition-colors group ${deleting === rc.asset.asset_id ? "opacity-40 pointer-events-none" : ""}`}
+            >
+            <button
+              className="flex items-center gap-4 flex-1 min-w-0 text-left"
               onClick={() => navigate(`/dashboard/resume/${rc.asset.asset_id}`)}
-              className="w-full bg-slate-900 border border-slate-800 hover:border-slate-600
-                         rounded-2xl px-5 py-4 flex items-center gap-4 text-left
-                         transition-colors group"
             >
               {/* Icon */}
               <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700
@@ -189,6 +207,15 @@ export default function DashboardHome() {
               {/* Arrow indicator */}
               <Share2 className="w-4 h-4 text-slate-600 group-hover:text-cyan-400 transition-colors shrink-0" />
             </button>
+            <button
+              onClick={(e) => handleDelete(rc.asset.asset_id, e)}
+              className="shrink-0 p-2 text-slate-600 hover:text-red-400 hover:bg-red-950/30
+                         rounded-xl transition-colors"
+              title="Delete"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+            </div>
           ))}
         </div>
       )}
