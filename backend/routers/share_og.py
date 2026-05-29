@@ -23,7 +23,7 @@ import re
 import textwrap
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 
 from db.database import get_admin_db
@@ -182,10 +182,11 @@ def _generate_og_image(candidate_name: str) -> bytes:
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
 @router.get("/share/og/{token}", response_class=HTMLResponse)
-async def og_preview(token: str) -> HTMLResponse:
+async def og_preview(token: str, request: "Request") -> HTMLResponse:
     """
     Open Graph wrapper page.
     Bots read the meta tags; browsers are redirected to /shared-view/{token}.
+    URLs are built from the actual request host so ngrok/public URLs work automatically.
     """
     db = get_admin_db()
 
@@ -203,14 +204,18 @@ async def og_preview(token: str) -> HTMLResponse:
     asset_id = res.data[0]["asset_id"]
     name     = _get_candidate_name(db, asset_id)
 
-    # Derive public base URL from env or fallback
-    base_url    = os.environ.get("PUBLIC_BASE_URL", "http://localhost:8080")
-    viewer_url  = f"{base_url}/shared-view/{token}"
-    image_url   = f"{base_url}/share/og-image/{token}"
-    backend_url = os.environ.get("VITE_BACKEND_URL",
-                  os.environ.get("BACKEND_URL", "http://localhost:8000"))
-    # Image served from backend (FastAPI), not the frontend
-    image_url   = f"{backend_url}/share/og-image/{token}"
+    # Build URLs dynamically from the actual incoming request host.
+    # This makes the card work with ngrok, local, and any public domain
+    # without needing any env variable changes.
+    fwd_proto = request.headers.get("x-forwarded-proto", "http")
+    fwd_host  = (
+        request.headers.get("x-forwarded-host") or
+        request.headers.get("host") or
+        "localhost:8080"
+    )
+    base_url   = f"{fwd_proto}://{fwd_host}"
+    viewer_url = f"{base_url}/shared-view/{token}"
+    image_url  = f"{base_url}/share/og-image/{token}"
 
     title       = f"{name} — Verified Resume"
     description = (
