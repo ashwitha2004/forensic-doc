@@ -103,7 +103,11 @@ function StatTile({
 export default function ResumeDashboardPage() {
   const { assetId } = useParams<{ assetId: string }>();
   const navigate    = useNavigate();
-  const userId      = localStorage.getItem("biovault_userId") || "";
+  const userId      =
+    localStorage.getItem("pinit_user_id") ||
+    localStorage.getItem("biovault_userId") ||
+    localStorage.getItem("biovault_user_id") ||
+    "";
 
   const [activity,    setActivity]    = useState<{
     total_views: number; total_requests: number;

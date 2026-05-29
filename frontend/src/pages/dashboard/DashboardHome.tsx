@@ -34,7 +34,11 @@ interface ResumeCard {
 
 export default function DashboardHome() {
   const navigate = useNavigate();
-  const userId   = localStorage.getItem("biovault_userId") || "";
+  const userId   =
+    localStorage.getItem("pinit_user_id") ||
+    localStorage.getItem("biovault_userId") ||
+    localStorage.getItem("biovault_user_id") ||
+    "";
 
   const [cards,   setCards]   = useState<ResumeCard[]>([]);
   const [loading, setLoading] = useState(true);
