@@ -121,24 +121,29 @@ export default function ResumeDashboardPage() {
   const load = useCallback(async () => {
     if (!assetId || !userId) return;
     setLoading(true);
-    try {
-      const [ar, sr] = await Promise.allSettled([
-        fetch(`${BACKEND_URL}/resume/share/activity/${assetId}?user_id=${encodeURIComponent(userId)}`),
-        fetch(`${BACKEND_URL}/resume/activity/sessions/${assetId}?user_id=${encodeURIComponent(userId)}`),
-      ]);
 
-      if (ar.status === "fulfilled" && ar.value.ok) {
-        setActivity(await ar.value.json());
-      }
-      if (sr.status === "fulfilled" && sr.value.ok) {
-        const d = await sr.value.json();
-        const list: ViewerSession[] = d.sessions ?? [];
-        list.sort((a, b) => new Date(b.first_seen).getTime() - new Date(a.first_seen).getTime());
-        setSessions(list);
-      }
-    } finally {
-      setLoading(false);
-    }
+    // Fetch both in parallel but render as soon as the FASTER one returns
+    const activityPromise = fetch(
+      `${BACKEND_URL}/resume/share/activity/${assetId}?user_id=${encodeURIComponent(userId)}`
+    );
+    const sessionsPromise = fetch(
+      `${BACKEND_URL}/resume/activity/sessions/${assetId}?user_id=${encodeURIComponent(userId)}`
+    );
+
+    // Show activity (requests/stats) the moment it arrives — don't wait for sessions
+    activityPromise.then(async r => {
+      if (r.ok) setActivity(await r.json());
+      setLoading(false);   // ← unblock the UI as soon as activity data is ready
+    }).catch(() => setLoading(false));
+
+    // Sessions load in the background — viewer tracking section updates when ready
+    sessionsPromise.then(async r => {
+      if (!r.ok) return;
+      const d = await r.json();
+      const list: ViewerSession[] = d.sessions ?? [];
+      list.sort((a, b) => new Date(b.first_seen).getTime() - new Date(a.first_seen).getTime());
+      setSessions(list);
+    }).catch(() => {});
   }, [assetId, userId]);
 
   useEffect(() => { load(); }, [load]);

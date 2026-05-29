@@ -66,34 +66,38 @@ export default function DashboardHome() {
       if (!vr.ok) { setLoading(false); return; }
       const { assets }: { assets: VaultAsset[] } = await vr.json();
 
-      // Seed cards with vault assets immediately (no dependency on share activity)
+      // ── Step 1: render the list immediately — no waiting for share data ──
       const base: ResumeCard[] = assets.map(a => ({
         asset: a, totalViews: 0, pendingCount: 0, activeLinks: 0,
       }));
       setCards(base);
+      setLoading(false);   // ← hide skeleton NOW, before enrichment
 
-      // Enrich with share activity where available
-      const enriched = [...base];
-      await Promise.allSettled(
-        assets.map(async (asset, i) => {
-          try {
-            const r = await fetch(
-              `${BACKEND_URL}/resume/share/activity/${asset.asset_id}?user_id=${encodeURIComponent(userId)}`
-            );
-            if (r.ok) {
-              const d = await r.json();
-              enriched[i] = {
+      // ── Step 2: enrich cards one-by-one in the background ───────────────
+      // Each fetch updates its own card as soon as it resolves — no waiting
+      // for all requests before re-rendering.
+      assets.forEach(async (asset, i) => {
+        try {
+          const r = await fetch(
+            `${BACKEND_URL}/resume/share/activity/${asset.asset_id}?user_id=${encodeURIComponent(userId)}`
+          );
+          if (!r.ok) return;
+          const d = await r.json();
+          setCards(prev => {
+            const next = [...prev];
+            if (next[i]) {
+              next[i] = {
                 asset,
-                totalViews  : d.total_views      ?? 0,
-                pendingCount: d.pending_requests  ?? 0,
+                totalViews  : d.total_views     ?? 0,
+                pendingCount: d.pending_requests ?? 0,
                 activeLinks : (d.share_links ?? []).filter((l: any) => l.is_active).length,
               };
             }
-          } catch { /* ignore */ }
-        })
-      );
-      setCards([...enriched]);
-    } finally {
+            return next;
+          });
+        } catch { /* ignore — card stays with default zeros */ }
+      });
+    } catch {
       setLoading(false);
     }
   }, [userId]);
