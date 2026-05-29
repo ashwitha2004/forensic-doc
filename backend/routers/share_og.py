@@ -63,7 +63,8 @@ def _name_from_filename(filename: str) -> str:
 
 def _get_candidate_name(db, asset_id: str) -> str:
     """
-    Priority: owner_name field → filename heuristic → 'Candidate'
+    Priority: owner_name (if it looks like a real name) → filename heuristic → 'Candidate'
+    Skips owner_name if it looks like a user ID (USR-xxxxx, uuid, etc.)
     """
     try:
         res = (
@@ -76,8 +77,18 @@ def _get_candidate_name(db, asset_id: str) -> str:
         if res.data:
             row = res.data[0]
             owner = (row.get("owner_name") or "").strip()
-            if owner and owner.lower() not in ("none", "unknown", ""):
+            # Skip if it looks like a user ID, UUID, or system value
+            is_user_id = (
+                not owner or
+                owner.lower() in ("none", "unknown", "") or
+                re.match(r'^USR[-_]', owner, re.IGNORECASE) or
+                re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-', owner, re.IGNORECASE) or
+                len(owner) > 60 or
+                "@" in owner
+            )
+            if not is_user_id:
                 return owner
+            # Fall through to filename heuristic
             fname = row.get("file_name") or ""
             if fname:
                 return _name_from_filename(fname)

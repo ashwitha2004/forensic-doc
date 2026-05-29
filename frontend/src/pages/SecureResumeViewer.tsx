@@ -36,7 +36,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 const BACKEND_URL =
-  (import.meta as any).env?.VITE_BACKEND_URL || "http://localhost:8000";
+  (import.meta as any).env?.VITE_BACKEND_URL || "";
 
 const POLL_INTERVAL_MS = 5000;
 /** Returns a token-scoped key so each share link has independent request state. */

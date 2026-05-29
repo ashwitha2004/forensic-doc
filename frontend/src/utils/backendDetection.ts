@@ -6,7 +6,7 @@
 const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL ||
   import.meta.env.VITE_API_URL ||
-  "http://localhost:8000";
+  "";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Response types (mirror backend Pydantic schemas)

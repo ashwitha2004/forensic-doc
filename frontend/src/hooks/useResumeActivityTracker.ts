@@ -38,7 +38,7 @@
 
 import { useEffect, useRef } from "react";
 
-const BACKEND_URL        = (import.meta as any).env?.VITE_BACKEND_URL || "http://localhost:8000";
+const BACKEND_URL        = (import.meta as any).env?.VITE_BACKEND_URL || "";
 const FLUSH_INTERVAL_MS  = 15_000;  // batch-send events every 15 s
 const FLUSH_BATCH_SIZE   = 10;      // or when queue reaches 10 events
 const SESSION_LIVE_MS    = 30_000;  // push live duration+counters every 30 s

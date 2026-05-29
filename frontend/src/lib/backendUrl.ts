@@ -22,5 +22,5 @@ export function getBackendUrl(): string {
   }
 
   // Local dev — Vite proxies /api, so empty string works; explicit fallback for safety
-  return 'http://localhost:8000';
+  return '';
 }

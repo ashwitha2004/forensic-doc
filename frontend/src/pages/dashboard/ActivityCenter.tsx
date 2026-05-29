@@ -19,7 +19,7 @@ import {
 import { format, parseISO, subDays, startOfDay } from "date-fns";
 
 const BACKEND_URL =
-  (import.meta as any).env?.VITE_BACKEND_URL ?? "http://localhost:8000";
+  (import.meta as any).env?.VITE_BACKEND_URL ?? "";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

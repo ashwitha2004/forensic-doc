@@ -87,7 +87,7 @@ function DocIcon({ file, size = 16 }: { file: File; size?: number }) {
 const BACKEND_URL: string =
   (import.meta as any).env?.VITE_BACKEND_URL ||
   (typeof window !== "undefined" && window.location.hostname === "localhost"
-    ? "http://localhost:8000"
+    ? ""
     : "");
 
 // ─────────────────────────────────────────────────────────────────────────────
