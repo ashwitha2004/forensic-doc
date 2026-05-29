@@ -144,10 +144,12 @@ export default function DashboardHome() {
       ) : (
         <div className="space-y-3">
           {cards.map(rc => (
-            <div
+            <button
               key={rc.asset.asset_id}
-              className="bg-slate-900 border border-slate-800 rounded-2xl px-5 py-4
-                         flex items-center gap-4"
+              onClick={() => navigate(`/dashboard/resume/${rc.asset.asset_id}`)}
+              className="w-full bg-slate-900 border border-slate-800 hover:border-slate-600
+                         rounded-2xl px-5 py-4 flex items-center gap-4 text-left
+                         transition-colors group"
             >
               {/* Icon */}
               <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700
@@ -180,16 +182,9 @@ export default function DashboardHome() {
                 )}
               </div>
 
-              {/* Open Dashboard button */}
-              <button
-                onClick={() => navigate(`/dashboard/resume/${rc.asset.asset_id}`)}
-                className="flex items-center gap-2 px-4 py-2 bg-cyan-600/15 hover:bg-cyan-600/30
-                           border border-cyan-600/30 text-cyan-400 hover:text-cyan-300
-                           text-sm font-medium rounded-xl transition-all shrink-0"
-              >
-                <Share2 className="w-3.5 h-3.5" /> Open Dashboard
-              </button>
-            </div>
+              {/* Arrow indicator */}
+              <Share2 className="w-4 h-4 text-slate-600 group-hover:text-cyan-400 transition-colors shrink-0" />
+            </button>
           ))}
         </div>
       )}

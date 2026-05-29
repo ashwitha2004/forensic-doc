@@ -15,6 +15,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   Shield,
+  Upload,
   Eye,
   Users,
   Clock,
@@ -341,6 +342,13 @@ export default function ResumeShareDashboard() {
             <h1 className="text-base font-semibold text-white">Resume Share Dashboard</h1>
             <p className="text-xs text-slate-500">Asset: {assetId?.slice(0, 16)}…</p>
           </div>
+          <button
+            onClick={() => navigate("/encrypt")}
+            className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700
+                       text-white text-xs font-medium rounded-lg transition-colors"
+          >
+            <Upload className="w-3.5 h-3.5" /> Upload &amp; Encrypt
+          </button>
           <button onClick={load}
                   className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-white">
             <RefreshCw className="w-4 h-4" />
