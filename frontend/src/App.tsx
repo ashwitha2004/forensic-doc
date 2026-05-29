@@ -24,6 +24,7 @@ import DashboardHome        from "./pages/dashboard/DashboardHome";
 import SecureVault          from "./pages/dashboard/SecureVault";
 import ForensicsCenter      from "./pages/dashboard/ForensicsCenter";
 import SettingsPage         from "./pages/dashboard/SettingsPage";
+import ResumeDashboardPage  from "./pages/dashboard/ResumeDashboardPage";
 
 // ===================== GLOBAL ERROR BOUNDARY =====================
 class ErrorBoundary extends Component<
@@ -147,7 +148,7 @@ const App = () => (
             <Route path="/dashboard/vault"             element={<DashPage><SecureVault          /></DashPage>} />
             <Route path="/dashboard/forensics"         element={<DashPage><ForensicsCenter      /></DashPage>} />
             <Route path="/dashboard/settings"          element={<DashPage><SettingsPage         /></DashPage>} />
-            <Route path="/dashboard/resume/:assetId"   element={<DashPage><ResumeShareDashboard /></DashPage>} />
+            <Route path="/dashboard/resume/:assetId"   element={<DashPage><ResumeDashboardPage  /></DashPage>} />
 
             {/* ── Existing routes — preserved exactly ──────────────────── */}
             <Route
