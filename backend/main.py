@@ -14,6 +14,7 @@ from routers import auth, vault, pinit_verification
 from routers.vault_share import router as vault_share_router
 from routers.resume_share    import router as resume_share_router
 from routers.resume_activity import router as resume_activity_router
+from routers.share_og        import router as share_og_router
 from forensic import forensic_router
 from inference import inference_router
 from document_forensics import document_forensics_router
@@ -91,6 +92,9 @@ app.include_router(resume_share_router)
 
 # Register resume activity / security monitoring router (isolated tracking layer)
 app.include_router(resume_activity_router)
+
+# Register Open Graph share card router (OG preview for WhatsApp/LinkedIn/Telegram)
+app.include_router(share_og_router)
 
 # Register forensic analysis router
 app.include_router(forensic_router)
