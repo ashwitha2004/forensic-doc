@@ -728,35 +728,49 @@ const Encrypt = () => {
                         )}
                       </div>
                     ) : (
-                      <div className="mb-6 bg-slate-800/60 border border-cyan-700/40 rounded-xl p-4">
-                        <p className="text-xs text-cyan-400 font-semibold mb-2 flex items-center gap-1">
-                          <Share2 className="w-3 h-3" /> Secure Share Link Created
-                        </p>
-                        <div className="flex items-center gap-2 bg-slate-950/60 rounded-lg px-3 py-2 mb-3">
-                          <code className="flex-1 text-xs text-cyan-300 truncate font-mono">
-                            {`${window.location.origin}/shared-view/${shareToken}`}
-                          </code>
-                          <button
-                            onClick={copyShareLink}
-                            className="shrink-0 p-1 hover:bg-slate-700 rounded transition-colors"
-                          >
-                            {shareCopied
-                              ? <CheckCircle className="w-4 h-4 text-green-400" />
-                              : <Copy className="w-4 h-4 text-slate-400" />}
-                          </button>
+                      <div className="mb-6 bg-slate-800/60 border border-cyan-700/40 rounded-xl p-4 space-y-3">
+
+                        {/* ── Card share link (WhatsApp / LinkedIn / Telegram) ── */}
+                        <div>
+                          <p className="text-xs text-cyan-400 font-semibold mb-1 flex items-center gap-1">
+                            <Share2 className="w-3 h-3" /> Share Link
+                            <span className="ml-1 text-slate-500 font-normal">— shows resume card on WhatsApp &amp; LinkedIn</span>
+                          </p>
+                          <div className="flex items-center gap-2 bg-slate-950/60 rounded-lg px-3 py-2">
+                            <code className="flex-1 text-xs text-cyan-300 truncate font-mono">
+                              {`${window.location.origin}/share/og/${shareToken}`}
+                            </code>
+                            <button
+                              onClick={() => {
+                                const url = `${window.location.origin}/share/og/${shareToken}`;
+                                navigator.clipboard.writeText(url).then(() => {
+                                  setShareCopied(true);
+                                  setTimeout(() => setShareCopied(false), 2500);
+                                });
+                              }}
+                              className="shrink-0 p-1 hover:bg-slate-700 rounded transition-colors"
+                            >
+                              {shareCopied
+                                ? <CheckCircle className="w-4 h-4 text-green-400" />
+                                : <Copy className="w-4 h-4 text-slate-400" />}
+                            </button>
+                          </div>
+                          <p className="text-xs text-slate-600 mt-1">
+                            Clicking the link still opens the secure masked resume — tracking unchanged.
+                          </p>
                         </div>
-                        <div className="flex gap-2">
-                          <a
-                            href={`/shared-view/${shareToken}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="w-full bg-cyan-700/30 hover:bg-cyan-700/50 border border-cyan-700/40
-                                       text-cyan-300 text-xs font-medium py-2 rounded-lg transition-colors
-                                       flex items-center justify-center gap-1"
-                          >
-                            <ExternalLink className="w-3 h-3" /> Preview Shared View
-                          </a>
-                        </div>
+
+                        {/* ── Direct preview ── */}
+                        <a
+                          href={`/shared-view/${shareToken}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full bg-cyan-700/30 hover:bg-cyan-700/50 border border-cyan-700/40
+                                     text-cyan-300 text-xs font-medium py-2 rounded-lg transition-colors
+                                     flex items-center justify-center gap-1"
+                        >
+                          <ExternalLink className="w-3 h-3" /> Preview Shared View
+                        </a>
                       </div>
                     )}
 
