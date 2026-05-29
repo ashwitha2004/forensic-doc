@@ -750,20 +750,12 @@ const Encrypt = () => {
                             href={`/shared-view/${shareToken}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex-1 bg-cyan-700/30 hover:bg-cyan-700/50 border border-cyan-700/40
+                            className="w-full bg-cyan-700/30 hover:bg-cyan-700/50 border border-cyan-700/40
                                        text-cyan-300 text-xs font-medium py-2 rounded-lg transition-colors
                                        flex items-center justify-center gap-1"
                           >
-                            <ExternalLink className="w-3 h-3" /> Preview
+                            <ExternalLink className="w-3 h-3" /> Preview Shared View
                           </a>
-                          <button
-                            onClick={() => navigate(`/resume/dashboard/${encryptionResult.assetId}`)}
-                            className="flex-1 bg-purple-700/30 hover:bg-purple-700/50 border border-purple-700/40
-                                       text-purple-300 text-xs font-medium py-2 rounded-lg transition-colors
-                                       flex items-center justify-center gap-1"
-                          >
-                            <BarChart2 className="w-3 h-3" /> Dashboard
-                          </button>
                         </div>
                       </div>
                     )}
