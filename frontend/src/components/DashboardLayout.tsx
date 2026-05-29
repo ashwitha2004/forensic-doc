@@ -13,7 +13,7 @@ import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, Database,
-  Microscope, Settings, LogOut, Menu, X,
+  Microscope, Shield, Settings, LogOut, Menu, X,
   ChevronRight, Bell,
 } from "lucide-react";
 
