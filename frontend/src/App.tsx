@@ -148,7 +148,8 @@ const App = () => (
             {/* ── Persistent Dashboard ─────────────────────────────────── */}
             <Route path="/dashboard"            element={<DashPage><DashboardHome   /></DashPage>} />
             <Route path="/dashboard/vault"      element={<DashPage><SecureVault     /></DashPage>} />
-            <Route path="/dashboard/sharing"    element={<DashPage><SharingCenter   /></DashPage>} />
+            <Route path="/dashboard/sharing"             element={<DashPage><SharingCenter        /></DashPage>} />
+            <Route path="/dashboard/sharing/:assetId"  element={<DashPage><ResumeShareDashboard /></DashPage>} />
             <Route path="/dashboard/activity"   element={<DashPage><ActivityCenter  /></DashPage>} />
             <Route path="/dashboard/forensics"  element={<DashPage><ForensicsCenter /></DashPage>} />
             <Route path="/dashboard/security"   element={<DashPage><SecurityCenter  /></DashPage>} />

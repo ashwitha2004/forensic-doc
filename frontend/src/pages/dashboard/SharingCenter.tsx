@@ -11,7 +11,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Share2, Eye, Clock, CheckCircle, XCircle, Copy,
   Link2, RefreshCw, UserCheck, UserX, AlertTriangle,
-  FileText, ChevronDown, ChevronUp, Trash2, Database,
+  FileText, ChevronDown, ChevronUp, Trash2, Database, Shield,
 } from "lucide-react";
 import { formatDistanceToNow, format } from "date-fns";
 
@@ -209,7 +209,7 @@ function AssetPanel({
             <div className="text-center py-4">
               <p className="text-sm text-slate-500">No share links yet</p>
               <button
-                onClick={() => navigate(`/resume/dashboard/${activity.asset_id}`)}
+                onClick={() => navigate(`/dashboard/sharing/${activity.asset_id}`)}
                 className="text-xs text-cyan-500 hover:text-cyan-400 transition-colors mt-1"
               >
                 Create a share link →
@@ -306,12 +306,16 @@ function AssetPanel({
           )}
 
           {/* Full dashboard link */}
-          <div className="pt-2 border-t border-slate-800">
+          <div className="pt-3 border-t border-slate-800">
             <button
-              onClick={() => navigate(`/resume/dashboard/${activity.asset_id}`)}
-              className="text-xs text-cyan-500 hover:text-cyan-400 transition-colors flex items-center gap-1"
+              onClick={() => navigate(`/dashboard/sharing/${activity.asset_id}`)}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5
+                         bg-cyan-600/15 hover:bg-cyan-600/25 border border-cyan-600/30
+                         text-cyan-400 hover:text-cyan-300 text-sm font-medium rounded-xl
+                         transition-all"
             >
-              <Share2 className="w-3 h-3" /> Open full share dashboard →
+              <Shield className="w-4 h-4" />
+              Open Full Dashboard — Requests · Views · Security · Analytics
             </button>
           </div>
         </div>

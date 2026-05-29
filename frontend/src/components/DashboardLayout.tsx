@@ -22,7 +22,7 @@ import {
 const NAV_ITEMS = [
   { label: "Dashboard",     icon: LayoutDashboard, path: "/dashboard"             },
   { label: "Secure Vault",  icon: Database,         path: "/dashboard/vault"       },
-  { label: "Sharing",       icon: Share2,           path: "/dashboard/sharing"     },
+  { label: "Sharing Center", icon: Share2,           path: "/dashboard/sharing"     },
   { label: "Activity",      icon: Activity,         path: "/dashboard/activity"    },
   { label: "Forensics",     icon: Microscope,       path: "/dashboard/forensics"   },
   { label: "Security",      icon: Shield,           path: "/dashboard/security"    },
