@@ -25,6 +25,7 @@ export default defineConfig(({ mode }) => ({
       '/inference' : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
       '/unified'   : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
       '/document'  : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/share'     : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
     },
   },
   plugins: [
