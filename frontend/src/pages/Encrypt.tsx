@@ -15,6 +15,7 @@ import {
   Copy,
   BarChart2,
   ExternalLink,
+  Activity,
 } from "lucide-react";
 import { embedAdvancedWatermark, type AdvancedWatermarkMetadata } from "@/lib/advancedSteganography";
 import { embedSimpleWatermark, type SimpleWatermarkMetadata } from "@/lib/simpleSteganography";
@@ -745,7 +746,7 @@ const Encrypt = () => {
                               : <Copy className="w-4 h-4 text-slate-400" />}
                           </button>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 flex-col">
                           <a
                             href={`/shared-view/${shareToken}`}
                             target="_blank"
@@ -756,6 +757,14 @@ const Encrypt = () => {
                           >
                             <ExternalLink className="w-3 h-3" /> Preview Shared View
                           </a>
+                          <button
+                            onClick={() => navigate(`/resume/dashboard/${encryptionResult?.assetId}`)}
+                            className="w-full bg-purple-700/30 hover:bg-purple-700/50 border border-purple-700/40
+                                       text-purple-300 text-xs font-medium py-2 rounded-lg transition-colors
+                                       flex items-center justify-center gap-1"
+                          >
+                            <Activity className="w-3 h-3" /> Open Share Dashboard
+                          </button>
                         </div>
                       </div>
                     )}
