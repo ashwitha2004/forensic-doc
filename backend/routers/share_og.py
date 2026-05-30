@@ -356,9 +356,18 @@ async def register_slug(body: RegisterSlugRequest):
     Always returns a slug — uses in-memory cache if DB column not yet added.
     Returns: { slug, slug_url_path }
     """
-    db   = get_admin_db()
-    slug = _get_or_create_slug(db, body.share_token, body.asset_id)
-    return {"slug": slug, "slug_url_path": f"/r/{slug}"}
+    try:
+        db   = get_admin_db()
+        slug = _get_or_create_slug(db, body.share_token, body.asset_id)
+        import logging
+        logging.getLogger("share_og").info(
+            f"[SLUG] token={body.share_token[:8]}… → slug={slug}"
+        )
+        return {"slug": slug, "slug_url_path": f"/r/{slug}"}
+    except Exception as e:
+        import logging
+        logging.getLogger("share_og").error(f"[SLUG] register failed: {e}")
+        raise
 
 
 @router.get("/share/og/{token}", response_class=HTMLResponse)

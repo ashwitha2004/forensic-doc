@@ -386,9 +386,9 @@ const Encrypt = () => {
 
       const data  = await res.json();
       const token = data.share_token;
-      setShareToken(token);
 
-      // Generate human-readable slug immediately from resume text
+      // Generate slug BEFORE showing any URL — so user only ever sees the clean URL
+      let slug: string | null = null;
       try {
         const slugRes = await fetch(`/share/og/register-slug`, {
           method : "POST",
@@ -400,9 +400,13 @@ const Encrypt = () => {
         });
         if (slugRes.ok) {
           const sd = await slugRes.json();
-          if (sd.slug) setShareSlug(sd.slug);
+          slug = sd.slug ?? null;
         }
-      } catch { /* non-critical — token URL still works */ }
+      } catch { /* slug is best-effort */ }
+
+      // Set both together — one render, correct URL shown immediately
+      setShareToken(token);
+      setShareSlug(slug);
     } catch (error) {
       setShareError(error instanceof Error ? error.message : "Failed to create share link");
     } finally {
