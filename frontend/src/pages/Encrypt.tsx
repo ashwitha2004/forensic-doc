@@ -112,11 +112,11 @@ const Encrypt = () => {
   const [fileCategory, setFileCategory]     = useState<"image" | "document" | null>(null);
 
   // ── Share link state ───────────────────────────────────────────────────────
-  const [shareToken, setShareToken]         = useState<string | null>(null);
-  const [shareSlug,  setShareSlug]          = useState<string | null>(null);
-  const [shareLoading, setShareLoading]     = useState(false);
-  const [shareError, setShareError]         = useState<string | null>(null);
-  const [shareCopied, setShareCopied]       = useState(false);
+  const [shareToken,   setShareToken]   = useState<string | null>(null);
+  const [shareSlug,    setShareSlug]    = useState<string | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareError,   setShareError]   = useState<string | null>(null);
+  const [shareCopied,  setShareCopied]  = useState(false);
 
   // ── Existing image helpers (unchanged) ────────────────────────────────────
 
@@ -384,10 +384,25 @@ const Encrypt = () => {
         throw new Error(err.detail || "Failed to create share link");
       }
 
-      const data = await res.json();
-      setShareToken(data.share_token);
-      // Slug is generated lazily when the OG link is first opened.
-      // /r/{name} will work automatically after the first share.
+      const data  = await res.json();
+      const token = data.share_token;
+      setShareToken(token);
+
+      // Generate human-readable slug immediately from resume text
+      try {
+        const slugRes = await fetch(`/share/og/register-slug`, {
+          method : "POST",
+          headers: { "Content-Type": "application/json" },
+          body   : JSON.stringify({
+            share_token: token,
+            asset_id   : encryptionResult.assetId,
+          }),
+        });
+        if (slugRes.ok) {
+          const sd = await slugRes.json();
+          if (sd.slug) setShareSlug(sd.slug);
+        }
+      } catch { /* non-critical — token URL still works */ }
     } catch (error) {
       setShareError(error instanceof Error ? error.message : "Failed to create share link");
     } finally {
@@ -414,6 +429,7 @@ const Encrypt = () => {
     setFileCategory(null);
     setEncryptionResult(null);
     setShareToken(null);
+    setShareSlug(null);
     setShareError(null);
     setShareCopied(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -733,20 +749,25 @@ const Encrypt = () => {
                     ) : (
                       <div className="mb-6 bg-slate-800/60 border border-cyan-700/40 rounded-xl p-4 space-y-3">
 
-                        {/* ── Share link (WhatsApp card preview) ── */}
+                        {/* ── Share link — clean human-readable URL ── */}
                         <div>
                           <p className="text-xs text-cyan-400 font-semibold mb-2 flex items-center gap-1">
                             <Share2 className="w-3 h-3" /> Share Link
                           </p>
+
+                          {/* Primary: slug URL (e.g. /r/ashwitha-kavvam) */}
                           <div className="flex items-center gap-2 bg-slate-950/60 rounded-lg px-3 py-2 mb-1">
                             <code className="flex-1 text-xs text-cyan-300 truncate font-mono">
-                              {`${window.location.origin}/share/og/${shareToken}`}
+                              {shareSlug
+                                ? `${window.location.origin}/r/${shareSlug}`
+                                : `${window.location.origin}/share/og/${shareToken}`}
                             </code>
                             <button
                               onClick={() => {
-                                navigator.clipboard.writeText(
-                                  `${window.location.origin}/share/og/${shareToken}`
-                                ).then(() => {
+                                const url = shareSlug
+                                  ? `${window.location.origin}/r/${shareSlug}`
+                                  : `${window.location.origin}/share/og/${shareToken}`;
+                                navigator.clipboard.writeText(url).then(() => {
                                   setShareCopied(true);
                                   setTimeout(() => setShareCopied(false), 2500);
                                 });
@@ -759,7 +780,9 @@ const Encrypt = () => {
                             </button>
                           </div>
                           <p className="text-xs text-slate-500">
-                            Shows branded card on WhatsApp · LinkedIn · Telegram
+                            {shareSlug
+                              ? `Clean URL · also works as /share/og/${shareToken?.slice(0,8)}…`
+                              : "Shows branded card on WhatsApp · LinkedIn · Telegram"}
                           </p>
                         </div>
 

@@ -24,6 +24,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
+from pydantic import BaseModel
 
 from db.database import get_admin_db
 from routers.resume_share import _fetch_and_decrypt, _extract_text
@@ -147,9 +148,13 @@ def _name_to_slug(name: str) -> str:
     return "-".join(parts) if parts else "resume"
 
 def _unique_slug(db, base_slug: str) -> str:
-    """Append a short random suffix until the slug is unique."""
+    """
+    Return base_slug if available, otherwise ashwitha-kavvam-2, -3, etc.
+    Predictable numbering so users can guess related links.
+    """
     slug = base_slug
-    for _ in range(10):
+    counter = 2
+    for _ in range(20):
         try:
             res = (
                 db.table("resume_share_links")
@@ -161,9 +166,9 @@ def _unique_slug(db, base_slug: str) -> str:
             if not res.data:
                 return slug
         except Exception:
-            return slug  # column may not exist yet — return as-is
-        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=3))
-        slug   = f"{base_slug}-{suffix}"
+            return slug  # slug column not yet created — return as-is
+        slug = f"{base_slug}-{counter}"
+        counter += 1
     return slug
 
 def _get_or_create_slug(db, token: str, asset_id: str) -> Optional[str]:
@@ -303,6 +308,25 @@ def _generate_og_image(candidate_name: str) -> bytes:
     return buf.getvalue()
 
 # ─── Routes ────────────────────────────────────────────────────────────────────
+
+class RegisterSlugRequest(BaseModel):
+    share_token: str
+    asset_id   : str
+
+@router.post("/share/og/register-slug")
+async def register_slug(body: RegisterSlugRequest):
+    """
+    Called immediately after share link creation.
+    Generates (or returns existing) human-readable slug for the token.
+    Returns: { slug, slug_url_path }
+    No changes to token, masking, approval, or any existing logic.
+    """
+    db   = get_admin_db()
+    slug = _get_or_create_slug(db, body.share_token, body.asset_id)
+    if not slug:
+        return {"slug": None, "slug_url_path": None}
+    return {"slug": slug, "slug_url_path": f"/r/{slug}"}
+
 
 @router.get("/share/og/{token}", response_class=HTMLResponse)
 async def og_preview(token: str, request: Request) -> HTMLResponse:
