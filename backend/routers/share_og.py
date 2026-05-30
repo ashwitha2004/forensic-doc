@@ -26,6 +26,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
 
 from db.database import get_admin_db
+from routers.resume_share import _fetch_and_decrypt, _extract_text
 
 router = APIRouter()
 
@@ -53,30 +54,86 @@ def _name_from_filename(filename: str) -> str:
         name_parts.append(p.strip().capitalize())
     return " ".join(name_parts) if name_parts else "Candidate"
 
+def _looks_like_name(text: str) -> bool:
+    """True if text looks like a person's name (2-4 words, no digits, not a role word)."""
+    parts = text.strip().split()
+    if not (2 <= len(parts) <= 4):
+        return False
+    for p in parts:
+        if any(c.isdigit() for c in p):
+            return False
+        if p.lower() in _ROLE_WORDS:
+            return False
+        if p.lower() in {"updated", "new", "final", "revised", "latest", "draft",
+                         "copy", "version", "old", "temp", "test", "sample"}:
+            return False
+    return True
+
+
+def _name_from_resume_text(db, asset: dict) -> Optional[str]:
+    """
+    Decrypt the resume and read the first non-empty line — almost always
+    the candidate's name on a real resume. Reuses existing helper functions.
+    """
+    try:
+        fname = asset.get("file_name") or ""
+        raw   = _fetch_and_decrypt(db, asset, fname)
+        text  = _extract_text(raw, fname)
+        for line in text.splitlines():
+            line = line.strip()
+            if line and _looks_like_name(line):
+                # Capitalise each word cleanly
+                return " ".join(w.capitalize() for w in line.split())
+    except Exception:
+        pass
+    return None
+
+
 def _get_candidate_name(db, asset_id: str) -> str:
+    """
+    Priority:
+      1. First line of resume text (most accurate)
+      2. owner_name field if it looks like a real name
+      3. Filename heuristic
+      4. "Candidate" fallback
+    """
     try:
         res = (
             db.table("vault_images")
-            .select("owner_name, file_name")
+            .select("*")
             .eq("asset_id", asset_id)
             .limit(1)
             .execute()
         )
-        if res.data:
-            row   = res.data[0]
-            owner = (row.get("owner_name") or "").strip()
-            bad   = (
-                not owner or
-                owner.lower() in ("none", "unknown", "") or
-                re.match(r"^USR[-_]", owner, re.IGNORECASE) or
-                re.match(r"^[0-9a-f]{8}-", owner, re.IGNORECASE) or
-                len(owner) > 60 or "@" in owner
-            )
-            if not bad:
-                return owner
-            fname = row.get("file_name") or ""
-            if fname:
-                return _name_from_filename(fname)
+        if not res.data:
+            return "Candidate"
+
+        asset = res.data[0]
+
+        # 1. Try extracting from actual resume text
+        name_from_text = _name_from_resume_text(db, asset)
+        if name_from_text:
+            return name_from_text
+
+        # 2. owner_name if it looks like a real person's name
+        owner = (asset.get("owner_name") or "").strip()
+        bad   = (
+            not owner or
+            owner.lower() in ("none", "unknown", "") or
+            re.match(r"^USR[-_]", owner, re.IGNORECASE) or
+            re.match(r"^[0-9a-f]{8}-", owner, re.IGNORECASE) or
+            len(owner) > 60 or "@" in owner or
+            not _looks_like_name(owner)
+        )
+        if not bad:
+            return owner
+
+        # 3. Filename heuristic
+        fname = asset.get("file_name") or ""
+        if fname:
+            n = _name_from_filename(fname)
+            if _looks_like_name(n):
+                return n
     except Exception:
         pass
     return "Candidate"
