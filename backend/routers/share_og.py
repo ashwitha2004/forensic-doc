@@ -102,88 +102,134 @@ def _get_candidate_name(db, asset_id: str) -> str:
 def _generate_og_image(candidate_name: str) -> bytes:
     """
     Returns a 1200×630 PNG branded card using Pillow.
-    Falls back gracefully if Pillow is somehow unavailable.
+    Professional dark design with PINIT branding.
     """
     from PIL import Image, ImageDraw, ImageFont  # type: ignore
 
     W, H = 1200, 630
-    BG        = (10,  20,  40)     # #0a1428 deep navy
-    ACCENT    = (6,  182, 212)     # #06b6d4 cyan
-    WHITE     = (255, 255, 255)
-    GRAY      = (148, 163, 184)    # slate-400
-    CARD_BG   = (15,  30,  60)     # slightly lighter panel
-    GREEN     = (34, 197,  94)     # #22c55e
 
-    img  = Image.new("RGB", (W, H), BG)
+    # ── Colour palette ────────────────────────────────────────────────────────
+    BG_TOP    = (8,   15,  35)    # near-black navy
+    BG_BOT    = (12,  25,  55)    # slightly lighter navy
+    ACCENT    = (6,  182, 212)    # cyan  #06b6d4
+    ACCENT_DK = (4,  120, 150)    # darker cyan for borders
+    WHITE     = (255, 255, 255)
+    GRAY_LT   = (203, 213, 225)   # slate-300
+    GRAY      = (100, 116, 139)   # slate-500
+    GREEN     = (34,  197,  94)   # #22c55e
+    GREEN_DK  = (6,   78,  39)    # dark green bg
+    FOOTER_BG = (5,   12,  30)    # near-black footer
+
+    img  = Image.new("RGB", (W, H), BG_TOP)
     draw = ImageDraw.Draw(img)
 
-    # ── Background gradient band ──────────────────────────────────────────────
+    # ── Gradient background (top → bottom) ───────────────────────────────────
     for y in range(H):
-        alpha = y / H
-        r = int(BG[0] + (CARD_BG[0] - BG[0]) * alpha)
-        g = int(BG[1] + (CARD_BG[1] - BG[1]) * alpha)
-        b = int(BG[2] + (CARD_BG[2] - BG[2]) * alpha)
+        t = y / H
+        r = int(BG_TOP[0] + (BG_BOT[0] - BG_TOP[0]) * t)
+        g = int(BG_TOP[1] + (BG_BOT[1] - BG_TOP[1]) * t)
+        b = int(BG_TOP[2] + (BG_BOT[2] - BG_TOP[2]) * t)
         draw.line([(0, y), (W, y)], fill=(r, g, b))
 
-    # ── Cyan accent bar (left edge) ───────────────────────────────────────────
-    draw.rectangle([0, 0, 8, H], fill=ACCENT)
+    # ── Left accent stripe ────────────────────────────────────────────────────
+    draw.rectangle([0, 0, 6, H], fill=ACCENT)
 
-    # ── Top: PINIT Vault brand ────────────────────────────────────────────────
-    draw.rectangle([40, 40, W - 40, 110], fill=(20, 40, 80), outline=ACCENT, width=1)
+    # ── Subtle grid dots (decorative) ────────────────────────────────────────
+    for gx in range(50, W, 60):
+        for gy in range(50, H, 60):
+            draw.ellipse([gx-1, gy-1, gx+1, gy+1], fill=(30, 50, 80))
 
-    # Load fonts — try system fonts, fall back to default
+    # ── Load fonts ────────────────────────────────────────────────────────────
     def _font(size: int, bold: bool = False):
         candidates = [
-            "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/arialbd.ttf"   if bold else "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/calibrib.ttf"  if bold else "C:/Windows/Fonts/calibri.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
                 else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold
                 else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         ]
-        for path in candidates:
-            if os.path.exists(path):
+        for p in candidates:
+            if os.path.exists(p):
                 try:
-                    from PIL import ImageFont
-                    return ImageFont.truetype(path, size)
+                    return ImageFont.truetype(p, size)
                 except Exception:
                     pass
-        from PIL import ImageFont
         return ImageFont.load_default()
 
-    font_brand   = _font(28, bold=True)
-    font_sub     = _font(20)
-    font_name    = _font(72, bold=True)
-    font_tagline = _font(32)
-    font_badge   = _font(22)
+    f_brand  = _font(26, bold=True)   # "PINIT VAULT"
+    f_sub    = _font(18)              # "Secure Document Platform"
+    f_badge  = _font(19, bold=True)   # "CV VERIFIED BY PINIT"
+    f_name   = _font(70, bold=True)   # Candidate name
+    f_role   = _font(28)              # "Verified Resume"
+    f_cta    = _font(30, bold=True)   # "Tap to View Resume"
+    f_footer = _font(18)              # footer badges
 
-    # Brand text
-    draw.text((60, 62), "🛡  PINIT Vault", font=font_brand, fill=WHITE)
-    draw.text((W - 280, 68), "Secure Document Platform", font=font_sub, fill=GRAY)
+    # ── Header bar ────────────────────────────────────────────────────────────
+    draw.rectangle([0, 0, W, 88], fill=(6, 14, 38))
+    draw.line([(0, 88), (W, 88)], fill=ACCENT_DK, width=1)
+
+    # Brand dot + name
+    draw.ellipse([28, 28, 60, 60], fill=ACCENT)
+    draw.ellipse([35, 35, 53, 53], fill=(6, 14, 38))   # inner hole
+    draw.text((72, 30), "PINIT VAULT", font=f_brand, fill=WHITE)
+    draw.text((72, 58), "Secure Document Platform", font=f_sub, fill=GRAY)
 
     # ── Verified badge ────────────────────────────────────────────────────────
-    draw.rectangle([40, 145, 300, 195], fill=(6, 60, 40), outline=GREEN, width=1)
-    draw.text((58, 155), "✓  CV VERIFIED BY PINIT", font=font_badge, fill=GREEN)
+    bx, by = 28, 118
+    bw, bh = 310, 46
+    draw.rounded_rectangle([bx, by, bx + bw, by + bh],
+                            radius=8, fill=GREEN_DK, outline=GREEN, width=1)
+    draw.text((bx + 14, by + 12), "CV VERIFIED BY PINIT", font=f_badge, fill=GREEN)
 
     # ── Candidate name ────────────────────────────────────────────────────────
-    # Wrap long names
-    wrapped = textwrap.fill(candidate_name, width=20)
-    draw.text((40, 215), wrapped, font=font_name, fill=WHITE)
+    # Truncate to fit — keep on one line if possible
+    name_display = candidate_name
+    if len(candidate_name) > 22:
+        name_display = candidate_name[:20].strip() + "…"
+    draw.text((28, 186), name_display, font=f_name, fill=WHITE)
 
-    # ── Tagline ───────────────────────────────────────────────────────────────
-    draw.text((40, 420), "Tap to view verified resume", font=font_tagline, fill=ACCENT)
+    # ── Verified Resume subtitle ──────────────────────────────────────────────
+    draw.text((28, 276), "Verified Resume", font=f_role, fill=GRAY_LT)
 
-    # ── Bottom bar ────────────────────────────────────────────────────────────
-    draw.rectangle([0, H - 70, W, H], fill=(6, 182, 212, 30))
-    draw.rectangle([0, H - 70, W, H], fill=(10, 40, 80))
-    draw.text((40,  H - 48), "AES-256-GCM Encrypted  •  Tracked  •  Masked",
-              font=font_badge, fill=GRAY)
-    draw.text((W - 300, H - 48), "pinit.vault", font=font_badge, fill=ACCENT)
+    # ── Divider ───────────────────────────────────────────────────────────────
+    draw.line([(28, 324), (480, 324)], fill=ACCENT_DK, width=1)
 
-    # ── Decorative circles ────────────────────────────────────────────────────
-    draw.ellipse([W - 220, H - 280, W + 80, H + 20],
-                 outline=(6, 182, 212), width=2)
-    draw.ellipse([W - 160, 40, W + 40, 240],
-                 outline=(6, 182, 212, 60), width=1)
+    # ── CTA ───────────────────────────────────────────────────────────────────
+    draw.text((28, 342), "Tap to View Resume  →", font=f_cta, fill=ACCENT)
+
+    # ── Security badges row ───────────────────────────────────────────────────
+    badges = [
+        ("  ENCRYPTED", (5, 45, 70),   (6, 182, 212)),
+        ("  TRACKED",   (40, 20, 10),  (251, 146, 60)),
+        ("  MASKED",    (40, 10, 40),  (167, 139, 250)),
+    ]
+    bx2 = 28
+    for label, bg, fg in badges:
+        tw = len(label) * 11 + 20
+        draw.rounded_rectangle([bx2, 406, bx2 + tw, 446],
+                                radius=6, fill=bg, outline=fg, width=1)
+        draw.text((bx2 + 10, 416), label.strip(), font=f_footer, fill=fg)
+        bx2 += tw + 12
+
+    # ── Right-side decorative ring ────────────────────────────────────────────
+    cx, cy = 980, 315
+    for r, alpha in [(200, 15), (155, 25), (110, 40)]:
+        col = (int(6 + alpha), int(182 - alpha * 2), int(212 - alpha * 2))
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r],
+                     outline=col, width=2)
+    # Shield shape (simplified — two overlapping rects + triangle)
+    draw.rectangle([940, 250, 1020, 340], fill=(6, 25, 55), outline=ACCENT, width=2)
+    draw.polygon([(940, 340), (980, 390), (1020, 340)],
+                 fill=(6, 25, 55), outline=ACCENT)
+    draw.text((956, 288), "AES", font=_font(22, bold=True), fill=ACCENT)
+    draw.text((950, 313), "256", font=_font(18), fill=GRAY)
+
+    # ── Footer bar ────────────────────────────────────────────────────────────
+    draw.rectangle([0, H - 56, W, H], fill=FOOTER_BG)
+    draw.line([(0, H - 56), (W, H - 56)], fill=ACCENT_DK, width=1)
+    draw.text((28,  H - 38), "pinit.vault  •  AES-256-GCM Protected  •  Contact Masked",
+              font=f_footer, fill=GRAY)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
@@ -230,8 +276,8 @@ async def og_preview(token: str, request: "Request") -> HTMLResponse:
 
     title       = f"{name} — Verified Resume"
     description = (
-        f"View {name}'s CV verified and secured by PINIT Vault. "
-        "Contact details are masked — tap to request access."
+        f"{name} | Verified Resume · CV Verified by PINIT · "
+        "Tap to View Resume"
     )
 
     html = f"""<!DOCTYPE html>
