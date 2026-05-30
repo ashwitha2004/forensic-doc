@@ -219,11 +219,16 @@ export function useResumeActivityTracker(
     let   activeMs   = 0;
     let   activeFrom = Date.now();
     let   isVisible  = !document.hidden;
-    let   copyCount  = 0;
-    let   blurCount  = 0;
+    let   copyCount          = 0;
+    let   cutCount           = 0;
+    let   blurCount          = 0;
     let   printAttempts      = 0;
     let   screenshotSignals  = 0;
-    let   dvtSignal  = false;   // prevent duplicate devtools events
+    let   screenRecSignals   = 0;
+    let   dvtSignal          = false;   // prevent duplicate devtools events
+    // Screen recording heuristic — track rapid repeated tab hides
+    let   tabHideCount       = 0;
+    let   tabHideWindowStart = Date.now();
 
     // ── Flush ────────────────────────────────────────────────────────────
     const queueRef: TrackEvent[] = [];
@@ -304,22 +309,23 @@ export function useResumeActivityTracker(
     // ── Immediate security counter flush ─────────────────────────────────
     const pushSecurityUpdate = () => {
       const hasSuspiciousEvents =
-        screenshotSignals > 0 || copyCount > 5 || printAttempts > 0;
+        screenshotSignals > 0 || screenRecSignals > 0 ||
+        (copyCount + cutCount) > 5 || printAttempts > 0;
       _upsertSession({
         action            : "end",
         share_token       : token,
         session_id        : sessionId,
         viewer_email      : emailRef.current || undefined,
         total_duration_ms : Date.now() - startMs,
-        copy_count        : copyCount,
+        copy_count        : copyCount + cutCount,
         print_attempts    : printAttempts,
-        screenshot_signals: screenshotSignals,
+        screenshot_signals: screenshotSignals + screenRecSignals,
         is_suspicious     : hasSuspiciousEvents,
         last_seen         : new Date().toISOString(),
       });
     };
 
-    // ── Copy / text-selection ─────────────────────────────────────────────
+    // ── Copy / Cut / SelectStart ──────────────────────────────────────────
     const onCopy = (): void => {
       copyCount++;
       push("copy_attempt", {
@@ -327,6 +333,20 @@ export function useResumeActivityTracker(
         selected_chars: window.getSelection()?.toString().length ?? 0,
       });
       pushSecurityUpdate();
+    };
+
+    const onCut = (): void => {
+      cutCount++;
+      push("copy_attempt", {
+        method        : "cut",
+        count         : copyCount + cutCount,
+        selected_chars: window.getSelection()?.toString().length ?? 0,
+      });
+      pushSecurityUpdate();
+    };
+
+    const onSelectStart = (): void => {
+      push("text_selection_start", {});
     };
 
     const onMouseUp = (): void => {
@@ -389,15 +409,37 @@ export function useResumeActivityTracker(
     // ── Print dialog ──────────────────────────────────────────────────────
     const onBeforePrint = (): void => {
       printAttempts++;
-      push("print_attempt", { method: "browser_print_dialog" });
+      push("print_attempt", { method: "browser_print_dialog", phase: "start" });
       pushSecurityUpdate();
     };
 
-    // ── Visibility ────────────────────────────────────────────────────────
+    const onAfterPrint = (): void => {
+      push("print_attempt", { method: "browser_print_dialog", phase: "end" });
+    };
+
+    // ── Visibility — also detects rapid hide/show (screen recording heuristic)
     const onVisChange = (): void => {
       if (document.hidden) {
         pauseActive();
         push("tab_hidden", { active_ms_so_far: activeMs });
+
+        // Screen recording heuristic: ≥3 hides within 30 s
+        const now = Date.now();
+        if (now - tabHideWindowStart > 30_000) {
+          tabHideCount       = 0;
+          tabHideWindowStart = now;
+        }
+        tabHideCount++;
+        if (tabHideCount >= 3) {
+          screenRecSignals++;
+          tabHideCount = 0; // reset window
+          push("screen_recording_signal", {
+            method : "repeated_visibility_loss",
+            count  : screenRecSignals,
+            label  : "Possible Screen Recording",
+          });
+          pushSecurityUpdate();
+        }
       } else {
         resumeActive();
         push("tab_visible", {});
@@ -433,15 +475,17 @@ export function useResumeActivityTracker(
       pauseActive();
 
       const hasSuspiciousEvents =
-        screenshotSignals > 0 || copyCount > 5 || printAttempts > 0;
+        (screenshotSignals + screenRecSignals) > 0 ||
+        (copyCount + cutCount) > 5 || printAttempts > 0;
 
       push("session_end", {
-        total_ms  : Date.now() - startMs,
-        active_ms : activeMs,
-        copies    : copyCount,
-        blurs     : blurCount,
-        prints    : printAttempts,
-        screenshots: screenshotSignals,
+        total_ms          : Date.now() - startMs,
+        active_ms         : activeMs,
+        copies            : copyCount + cutCount,
+        blurs             : blurCount,
+        prints            : printAttempts,
+        screenshots       : screenshotSignals,
+        screen_recordings : screenRecSignals,
       });
       flush(true);   // sendBeacon for guaranteed delivery on page close
 
@@ -453,9 +497,9 @@ export function useResumeActivityTracker(
         viewer_email      : emailRef.current || undefined,
         total_duration_ms : Date.now() - startMs,
         active_duration_ms: activeMs,
-        copy_count        : copyCount,
+        copy_count        : copyCount + cutCount,
         print_attempts    : printAttempts,
-        screenshot_signals: screenshotSignals,
+        screenshot_signals: screenshotSignals + screenRecSignals,
         is_suspicious     : hasSuspiciousEvents,
       });
       if (typeof navigator.sendBeacon === "function") {
@@ -473,13 +517,34 @@ export function useResumeActivityTracker(
       }
     };
 
+    // ── getDisplayMedia interception (screen recording / screen share) ──────
+    let _origGetDisplayMedia: typeof navigator.mediaDevices.getDisplayMedia | null = null;
+    try {
+      if (navigator.mediaDevices?.getDisplayMedia) {
+        _origGetDisplayMedia = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
+        (navigator.mediaDevices as any).getDisplayMedia = async (opts?: any) => {
+          screenRecSignals++;
+          push("screen_recording_signal", {
+            method: "getDisplayMedia",
+            label : "Possible Screen Recording",
+            count : screenRecSignals,
+          });
+          pushSecurityUpdate();
+          return _origGetDisplayMedia!(opts);
+        };
+      }
+    } catch { /* read-only in some browsers — ignore */ }
+
     // ── Register all listeners ────────────────────────────────────────────
     document.addEventListener("copy",             onCopy,        { passive: true });
+    document.addEventListener("cut",              onCut,         { passive: true });
+    document.addEventListener("selectstart",      onSelectStart, { passive: true });
     document.addEventListener("keydown",          onKeyDown);
     document.addEventListener("mouseup",          onMouseUp,     { passive: true });
     document.addEventListener("contextmenu",      onContextMenu, { passive: true });
     document.addEventListener("visibilitychange", onVisChange,   { passive: true });
     window  .addEventListener("beforeprint",      onBeforePrint, { passive: true });
+    window  .addEventListener("afterprint",       onAfterPrint,  { passive: true });
     window  .addEventListener("blur",             onBlur,        { passive: true });
     window  .addEventListener("focus",            onFocus,       { passive: true });
     window  .addEventListener("resize",           onResize,      { passive: true });
@@ -494,7 +559,8 @@ export function useResumeActivityTracker(
       if (isVisible) activeMs += Date.now() - activeFrom;
       activeFrom = Date.now();
       const hasSuspiciousEvents =
-        screenshotSignals > 0 || copyCount > 5 || printAttempts > 0;
+        (screenshotSignals + screenRecSignals) > 0 ||
+        (copyCount + cutCount) > 5 || printAttempts > 0;
       _upsertSession({
         action            : "end",
         share_token       : token,
@@ -502,9 +568,9 @@ export function useResumeActivityTracker(
         viewer_email      : emailRef.current || undefined,
         total_duration_ms : Date.now() - startMs,
         active_duration_ms: activeMs,
-        copy_count        : copyCount,
+        copy_count        : copyCount + cutCount,
         print_attempts    : printAttempts,
-        screenshot_signals: screenshotSignals,
+        screenshot_signals: screenshotSignals + screenRecSignals,
         is_suspicious     : hasSuspiciousEvents,
         last_seen         : new Date().toISOString(),
       });
@@ -513,12 +579,22 @@ export function useResumeActivityTracker(
     onResize(); // immediate devtools check on load
 
     return () => {
+      // Restore original getDisplayMedia
+      try {
+        if (_origGetDisplayMedia && navigator.mediaDevices) {
+          navigator.mediaDevices.getDisplayMedia = _origGetDisplayMedia;
+        }
+      } catch { /* ignore */ }
+
       document.removeEventListener("copy",             onCopy);
+      document.removeEventListener("cut",              onCut);
+      document.removeEventListener("selectstart",      onSelectStart);
       document.removeEventListener("keydown",          onKeyDown);
       document.removeEventListener("mouseup",          onMouseUp);
       document.removeEventListener("contextmenu",      onContextMenu);
       document.removeEventListener("visibilitychange", onVisChange);
       window  .removeEventListener("beforeprint",      onBeforePrint);
+      window  .removeEventListener("afterprint",       onAfterPrint);
       window  .removeEventListener("blur",             onBlur);
       window  .removeEventListener("focus",            onFocus);
       window  .removeEventListener("resize",           onResize);
