@@ -338,7 +338,7 @@ const VerifyProof = () => {
 
     const BACKEND_URL: string =
       (import.meta as any).env?.VITE_BACKEND_URL ||
-      (window.location.hostname === 'localhost' ? 'http://localhost:8000' : '');
+      '';
 
     try {
       const res = await fetch(`${BACKEND_URL}/api/inference/report-failure`, {

@@ -15,6 +15,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   Shield,
+  Upload,
   Eye,
   Users,
   Clock,
@@ -28,10 +29,23 @@ import {
   Building2,
   Mail,
   MessageSquare,
+  Activity,
+  Cpu,
+  Printer,
+  Clipboard,
+  Camera,
+  EyeOff,
+  MousePointer,
+  Monitor,
+  Smartphone,
+  Tablet,
+  MapPin,
+  Globe,
+  Timer,
 } from "lucide-react";
 
 const BACKEND_URL =
-  (import.meta as any).env?.VITE_BACKEND_URL || "http://localhost:8000";
+  (import.meta as any).env?.VITE_BACKEND_URL || "";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,6 +87,63 @@ interface DashboardData {
   requests: AccessRequest[];
 }
 
+// ── Security timeline types (new) ─────────────────────────────────────────────
+
+interface ActivityEvent {
+  session_id    : string;
+  viewer_email  : string | null;
+  viewer_ip     : string | null;
+  event_type    : string;
+  event_details : Record<string, unknown>;
+  created_at    : string;
+  share_token   : string;
+}
+
+interface SessionSummary {
+  session_id    : string;
+  viewer_email  : string | null;
+  viewer_ip     : string | null;
+  first_seen    : string;
+  last_seen     : string;
+  event_count   : number;
+  is_suspicious : boolean;
+}
+
+interface TimelineData {
+  ok          : boolean;
+  asset_id    : string;
+  total       : number;
+  event_counts: Record<string, number>;
+  sessions    : SessionSummary[];
+  events      : ActivityEvent[];
+}
+
+// ── Rich viewer-session analytics type (new) ──────────────────────────────────
+
+interface ViewerSession {
+  session_id         : string;
+  share_token        : string;
+  viewer_email       : string | null;
+  viewer_ip          : string | null;
+  browser            : string | null;
+  os                 : string | null;
+  device_type        : "mobile" | "tablet" | "desktop" | null;
+  screen_size        : string | null;
+  is_first_visit     : boolean;
+  geo_status         : string | null;   // "pending"|"granted"|"denied"|"unavailable"
+  latitude           : number | null;
+  longitude          : number | null;
+  geo_accuracy       : number | null;
+  first_seen         : string;
+  last_seen          : string;
+  total_duration_ms  : number;
+  active_duration_ms : number;
+  copy_count         : number;
+  print_attempts     : number;
+  screenshot_signals : number;
+  is_suspicious      : boolean;
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ResumeShareDashboard() {
@@ -82,10 +153,18 @@ export default function ResumeShareDashboard() {
   const [data, setData]         = useState<DashboardData | null>(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"requests" | "views" | "links">("requests");
+  const [activeTab, setActiveTab] = useState<"requests" | "views" | "links" | "security">("requests");
   const [copied, setCopied]     = useState<string | null>(null);
   const [responding, setResponding] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
+
+  // Security timeline state (loaded lazily when Security tab is opened)
+  const [timeline, setTimeline]         = useState<TimelineData | null>(null);
+  const [timelineLoading, setTLLoading] = useState(false);
+
+  // Viewer-sessions state (loaded lazily alongside timeline)
+  const [viewerSessions, setViewerSessions]   = useState<ViewerSession[] | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
 
   const userId =
     localStorage.getItem("pinit_user_id") ||
@@ -114,6 +193,51 @@ export default function ResumeShareDashboard() {
   }, [assetId, userId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // ── Security timeline — loaded lazily when tab is first opened ────────────
+  const loadTimeline = useCallback(async () => {
+    if (!assetId || !userId) return;
+    setTLLoading(true);
+    try {
+      const res = await fetch(
+        `${BACKEND_URL}/resume/activity/timeline/${assetId}?user_id=${encodeURIComponent(userId)}`
+      );
+      if (res.ok) setTimeline(await res.json());
+    } catch { /* silent */ }
+    finally { setTLLoading(false); }
+  }, [assetId, userId]);
+
+  // ── Viewer sessions — loaded alongside timeline ───────────────────────────
+  const loadSessions = useCallback(async () => {
+    if (!assetId || !userId) return;
+    setSessionsLoading(true);
+    try {
+      const res = await fetch(
+        `${BACKEND_URL}/resume/activity/sessions/${assetId}?user_id=${encodeURIComponent(userId)}`
+      );
+      // Always call setViewerSessions — even on error — so it's never left as null.
+      // Leaving it null causes !viewerSessions to stay true and the effect re-fires
+      // in an infinite retry loop.
+      if (res.ok) {
+        const data = await res.json();
+        setViewerSessions(data.sessions ?? []);
+      } else {
+        setViewerSessions([]); // non-ok → stop retrying
+      }
+    } catch {
+      setViewerSessions([]); // network error → stop retrying
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, [assetId, userId]);
+
+  useEffect(() => {
+    if (activeTab === "security") {
+      if (!timeline && !timelineLoading) loadTimeline();
+      if (!viewerSessions && !sessionsLoading) loadSessions();
+    }
+  }, [activeTab, timeline, timelineLoading, loadTimeline,
+      viewerSessions, sessionsLoading, loadSessions]);
 
   // ── Create new share link ──────────────────────────────────────────────────
   const createShareLink = async () => {
@@ -218,6 +342,13 @@ export default function ResumeShareDashboard() {
             <h1 className="text-base font-semibold text-white">Resume Share Dashboard</h1>
             <p className="text-xs text-slate-500">Asset: {assetId?.slice(0, 16)}…</p>
           </div>
+          <button
+            onClick={() => navigate("/encrypt")}
+            className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700
+                       text-white text-xs font-medium rounded-lg transition-colors"
+          >
+            <Upload className="w-3.5 h-3.5" /> Upload &amp; Encrypt
+          </button>
           <button onClick={load}
                   className="p-2 hover:bg-slate-800 rounded-lg transition-colors text-slate-400 hover:text-white">
             <RefreshCw className="w-4 h-4" />
@@ -255,19 +386,21 @@ export default function ResumeShareDashboard() {
         </div>
 
         {/* ── Tabs ──────────────────────────────────────────────────────── */}
-        <div className="flex gap-1 border-b border-slate-800">
-          {(["requests", "views", "links"] as const).map(tab => (
+        <div className="flex gap-1 border-b border-slate-800 overflow-x-auto">
+          {(["requests", "views", "links", "security"] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2.5 text-sm font-medium capitalize transition-colors border-b-2 -mb-px
+              className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap capitalize transition-colors border-b-2 -mb-px
                 ${activeTab === tab
-                  ? "border-cyan-500 text-cyan-400"
+                  ? tab === "security" ? "border-red-500 text-red-400"
+                                       : "border-cyan-500 text-cyan-400"
                   : "border-transparent text-slate-500 hover:text-slate-300"}`}
             >
               {tab === "requests" ? `Requests (${data?.total_requests ?? 0})` :
                tab === "views"    ? `Views (${data?.total_views ?? 0})` :
-                                    `Share Links (${data?.share_links?.length ?? 0})`}
+               tab === "links"    ? `Share Links (${data?.share_links?.length ?? 0})` :
+                                    `🛡 Security`}
             </button>
           ))}
         </div>
@@ -431,9 +564,377 @@ export default function ResumeShareDashboard() {
             )}
           </div>
         )}
+        {/* ── Tab: Security Timeline (new — additive only) ──────────────── */}
+        {activeTab === "security" && (
+          <div className="space-y-4">
+
+            {/* Loading */}
+            {timelineLoading && (
+              <div className="flex items-center justify-center py-12 gap-3">
+                <div className="w-6 h-6 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-slate-400">Loading security events…</span>
+              </div>
+            )}
+
+            {!timelineLoading && timeline && (
+              <>
+                {/* Refresh button */}
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => { loadTimeline(); loadSessions(); }}
+                    className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-white
+                               bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Refresh
+                  </button>
+                </div>
+
+                {/* ── Viewer Sessions panel ─────────────────────────────── */}
+                {(viewerSessions ?? []).length > 0 && (
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                      <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <Users className="w-3.5 h-3.5" /> Viewer Sessions
+                      </h3>
+                      <span className="text-xs text-slate-600">{viewerSessions!.length} sessions</span>
+                    </div>
+                    <div className="divide-y divide-slate-800/60 max-h-[480px] overflow-y-auto">
+                      {viewerSessions!.map(s => (
+                        <div
+                          key={s.session_id}
+                          className={`px-4 py-3 space-y-2 ${s.is_suspicious ? "bg-red-950/10" : ""}`}
+                        >
+                          {/* Row 1 — identity + device badges */}
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-xs font-medium text-white truncate">
+                                {s.viewer_email ?? s.viewer_ip ?? s.session_id.slice(0, 16) + "…"}
+                              </p>
+                              <p className="text-xs text-slate-500">
+                                {s.viewer_ip && s.viewer_email ? s.viewer_ip : ""}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                              {/* Device type badge */}
+                              {s.device_type && (
+                                <span className="flex items-center gap-0.5 text-xs bg-slate-800 text-slate-300
+                                                 border border-slate-700/40 px-1.5 py-0.5 rounded">
+                                  {s.device_type === "mobile"  ? <Smartphone className="w-3 h-3" /> :
+                                   s.device_type === "tablet"  ? <Tablet className="w-3 h-3" /> :
+                                                                  <Monitor className="w-3 h-3" />}
+                                  {s.device_type}
+                                </span>
+                              )}
+                              {/* Browser badge */}
+                              {s.browser && (
+                                <span className="text-xs bg-slate-800 text-slate-300 border border-slate-700/40
+                                                 px-1.5 py-0.5 rounded truncate max-w-[90px]">
+                                  {s.browser}
+                                </span>
+                              )}
+                              {/* OS badge */}
+                              {s.os && (
+                                <span className="text-xs bg-slate-800 text-slate-400 border border-slate-700/40
+                                                 px-1.5 py-0.5 rounded truncate max-w-[90px]">
+                                  {s.os}
+                                </span>
+                              )}
+                              {/* Suspicious flag */}
+                              {s.is_suspicious && (
+                                <span className="text-xs bg-red-900/40 border border-red-700/40 text-red-300
+                                                 px-2 py-0.5 rounded-full">
+                                  ⚠ Suspicious
+                                </span>
+                              )}
+                              {/* First visit */}
+                              {s.is_first_visit && (
+                                <span className="text-xs bg-cyan-900/30 border border-cyan-700/30 text-cyan-400
+                                                 px-1.5 py-0.5 rounded">
+                                  1st visit
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Row 2 — geolocation */}
+                          <div className="flex items-center gap-3 flex-wrap">
+                            {s.geo_status === "granted" && s.latitude != null && s.longitude != null ? (
+                              <span className="flex items-center gap-1 text-xs text-green-400">
+                                <MapPin className="w-3 h-3" />
+                                {s.latitude.toFixed(4)}, {s.longitude.toFixed(4)}
+                                {s.geo_accuracy != null && (
+                                  <span className="text-slate-500">±{Math.round(s.geo_accuracy)}m</span>
+                                )}
+                              </span>
+                            ) : s.geo_status === "denied" ? (
+                              <span className="flex items-center gap-1 text-xs text-slate-500">
+                                <MapPin className="w-3 h-3" /> Location denied
+                              </span>
+                            ) : s.geo_status === "pending" || !s.geo_status ? (
+                              <span className="flex items-center gap-1 text-xs text-slate-600">
+                                <Globe className="w-3 h-3" /> Location pending
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-xs text-slate-600">
+                                <Globe className="w-3 h-3" /> Location unavailable
+                              </span>
+                            )}
+
+                            {/* Duration */}
+                            {s.total_duration_ms > 0 && (
+                              <span className="flex items-center gap-1 text-xs text-slate-400">
+                                <Timer className="w-3 h-3" />
+                                {_fmtDuration(s.total_duration_ms)}
+                                {s.active_duration_ms > 0 && (
+                                  <span className="text-slate-600">
+                                    ({_fmtDuration(s.active_duration_ms)} active)
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Row 3 — security counters */}
+                          {(s.copy_count > 0 || s.print_attempts > 0 || s.screenshot_signals > 0) && (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {s.copy_count > 0 && (
+                                <span className="flex items-center gap-0.5 text-xs text-yellow-400">
+                                  <Clipboard className="w-3 h-3" /> {s.copy_count} cop{s.copy_count === 1 ? "y" : "ies"}
+                                </span>
+                              )}
+                              {s.print_attempts > 0 && (
+                                <span className="flex items-center gap-0.5 text-xs text-yellow-400">
+                                  <Printer className="w-3 h-3" /> {s.print_attempts} print
+                                </span>
+                              )}
+                              {s.screenshot_signals > 0 && (
+                                <span className="flex items-center gap-0.5 text-xs text-red-400">
+                                  <Camera className="w-3 h-3" /> {s.screenshot_signals} screenshot
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Row 4 — timestamps */}
+                          <p className="text-xs text-slate-600">
+                            First seen: {new Date(s.first_seen).toLocaleString()}
+                            {s.last_seen !== s.first_seen && (
+                              <>  ·  Last: {new Date(s.last_seen).toLocaleString()}</>
+                            )}
+                            {s.screen_size && <> · {s.screen_size}</>}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Sessions loading state */}
+                {sessionsLoading && (
+                  <div className="flex items-center gap-2 py-2">
+                    <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-xs text-slate-500">Loading sessions…</span>
+                  </div>
+                )}
+
+                {/* Event-type breakdown */}
+                {Object.keys(timeline.event_counts).length > 0 && (
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+                      Event Breakdown
+                    </h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {Object.entries(timeline.event_counts)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([type, count]) => (
+                          <div key={type}
+                               className={`flex items-center justify-between px-3 py-2 rounded-lg border
+                                 ${_eventSeverity(type) === "high"
+                                   ? "bg-red-950/30 border-red-800/40"
+                                   : _eventSeverity(type) === "med"
+                                   ? "bg-yellow-950/20 border-yellow-800/30"
+                                   : "bg-slate-800/50 border-slate-700/30"}`}>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <EventIcon type={type} />
+                              <span className="text-xs text-slate-300 truncate">{_humaniseType(type)}</span>
+                            </div>
+                            <span className={`text-xs font-bold ml-2 shrink-0
+                              ${_eventSeverity(type) === "high" ? "text-red-400"
+                              : _eventSeverity(type) === "med"  ? "text-yellow-400"
+                              :                                    "text-slate-400"}`}>
+                              {count}
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Suspicious sessions */}
+                {timeline.sessions.filter(s => s.is_suspicious).length > 0 && (
+                  <div className="bg-red-950/20 border border-red-800/30 rounded-xl p-4">
+                    <h3 className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5" /> Suspicious Sessions
+                    </h3>
+                    <div className="space-y-2">
+                      {timeline.sessions.filter(s => s.is_suspicious).map(s => (
+                        <div key={s.session_id}
+                             className="flex items-center justify-between bg-slate-900/60 border border-red-900/30
+                                        rounded-lg px-3 py-2.5 gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-mono text-red-300 truncate">
+                              {s.viewer_email || s.viewer_ip || s.session_id.slice(0, 16) + "…"}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              {s.event_count} events · {new Date(s.first_seen).toLocaleString()}
+                            </p>
+                          </div>
+                          <span className="text-xs bg-red-900/40 border border-red-700/40 text-red-300
+                                           px-2 py-0.5 rounded-full shrink-0">
+                            Suspicious
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Full event timeline */}
+                {timeline.events.length === 0 ? (
+                  <EmptyState icon={<Activity className="w-10 h-10 text-slate-600" />}
+                              message="No activity events recorded yet. Events appear once viewers open a shared link." />
+                ) : (
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                      <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                        Event Timeline
+                      </h3>
+                      <span className="text-xs text-slate-600">{timeline.total} total</span>
+                    </div>
+                    <div className="divide-y divide-slate-800/60 max-h-[520px] overflow-y-auto">
+                      {timeline.events.map((ev, i) => {
+                        const sev = _eventSeverity(ev.event_type);
+                        return (
+                          <div key={i}
+                               className={`flex items-start gap-3 px-4 py-3
+                                 ${sev === "high" ? "bg-red-950/10" : ""}`}>
+                            <div className={`mt-0.5 shrink-0 w-6 h-6 rounded-full flex items-center justify-center
+                              ${sev === "high" ? "bg-red-900/40"
+                              : sev === "med"  ? "bg-yellow-900/30"
+                              :                  "bg-slate-800"}`}>
+                              <EventIcon type={ev.event_type} size={12} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={`text-xs font-medium
+                                  ${sev === "high" ? "text-red-300"
+                                  : sev === "med"  ? "text-yellow-300"
+                                  :                  "text-slate-300"}`}>
+                                  {_humaniseType(ev.event_type)}
+                                </span>
+                                {ev.viewer_email && (
+                                  <span className="text-xs text-slate-500 truncate max-w-[140px]">
+                                    {ev.viewer_email}
+                                  </span>
+                                )}
+                              </div>
+                              {Object.keys(ev.event_details ?? {}).length > 0 && (
+                                <p className="text-xs text-slate-600 mt-0.5 font-mono truncate">
+                                  {Object.entries(ev.event_details)
+                                    .map(([k, v]) => `${k}: ${v}`)
+                                    .join(" · ")
+                                    .slice(0, 120)}
+                                </p>
+                              )}
+                            </div>
+                            <div className="text-right shrink-0">
+                              <p className="text-xs text-slate-500">
+                                {new Date(ev.created_at).toLocaleTimeString()}
+                              </p>
+                              <p className="text-xs text-slate-700">
+                                {new Date(ev.created_at).toLocaleDateString()}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {!timelineLoading && !timeline && (
+              <EmptyState icon={<Activity className="w-10 h-10 text-slate-600" />}
+                          message="No activity data yet" />
+            )}
+          </div>
+        )}
+
       </div>
     </div>
   );
+}
+
+// ── Duration formatter ────────────────────────────────────────────────────────
+
+function _fmtDuration(ms: number): string {
+  if (ms < 1_000)  return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.round((ms % 60_000) / 1000);
+  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+}
+
+// ── Security helper functions (new) ───────────────────────────────────────────
+
+const _HIGH_EVENTS = new Set([
+  "screenshot_signal", "devtools_signal", "devtools_attempt", "view_source_attempt",
+]);
+const _MED_EVENTS = new Set([
+  "copy_attempt", "print_attempt", "save_attempt", "right_click", "text_selection",
+]);
+
+function _eventSeverity(type: string): "high" | "med" | "low" {
+  if (_HIGH_EVENTS.has(type)) return "high";
+  if (_MED_EVENTS.has(type))  return "med";
+  return "low";
+}
+
+function _humaniseType(type: string): string {
+  const map: Record<string, string> = {
+    resume_opened       : "Resume Opened",
+    copy_attempt        : "Copy Attempt",
+    text_selection      : "Text Selected",
+    print_attempt       : "Print Attempt",
+    save_attempt        : "Save Attempt",
+    view_source_attempt : "View Source Attempt",
+    right_click         : "Right Click",
+    screenshot_signal   : "Screenshot Signal",
+    devtools_attempt    : "DevTools Attempt",
+    devtools_signal     : "DevTools Detected",
+    tab_hidden          : "Tab Switched Away",
+    tab_visible         : "Tab Returned",
+    window_blur         : "Window Blur",
+    window_focus        : "Window Focus",
+    session_end         : "Session Ended",
+  };
+  return map[type] ?? type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function EventIcon({ type, size = 10 }: { type: string; size?: number }) {
+  const s = { width: size, height: size };
+  const sev = _eventSeverity(type);
+  const col = sev === "high" ? "text-red-400" : sev === "med" ? "text-yellow-400" : "text-slate-400";
+  if (type === "copy_attempt" || type === "text_selection") return <Clipboard style={s} className={col} />;
+  if (type === "print_attempt")        return <Printer  style={s} className={col} />;
+  if (type === "screenshot_signal")    return <Camera   style={s} className={col} />;
+  if (type.startsWith("devtools"))     return <Cpu      style={s} className={col} />;
+  if (type === "save_attempt" || type === "view_source_attempt") return <EyeOff style={s} className={col} />;
+  if (type === "right_click")          return <MousePointer style={s} className={col} />;
+  if (type === "resume_opened" || type === "session_end") return <Monitor style={s} className={col} />;
+  if (type.startsWith("tab") || type.startsWith("window")) return <Eye style={s} className={col} />;
+  return <Activity style={s} className={col} />;
 }
 
 // ── Small helper components ────────────────────────────────────────────────────

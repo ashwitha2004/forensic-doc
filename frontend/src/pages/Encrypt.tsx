@@ -87,7 +87,7 @@ function DocIcon({ file, size = 16 }: { file: File; size?: number }) {
 const BACKEND_URL: string =
   (import.meta as any).env?.VITE_BACKEND_URL ||
   (typeof window !== "undefined" && window.location.hostname === "localhost"
-    ? "http://localhost:8000"
+    ? ""
     : "");
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,10 +112,11 @@ const Encrypt = () => {
   const [fileCategory, setFileCategory]     = useState<"image" | "document" | null>(null);
 
   // ── Share link state ───────────────────────────────────────────────────────
-  const [shareToken, setShareToken]         = useState<string | null>(null);
-  const [shareLoading, setShareLoading]     = useState(false);
-  const [shareError, setShareError]         = useState<string | null>(null);
-  const [shareCopied, setShareCopied]       = useState(false);
+  const [shareToken,   setShareToken]   = useState<string | null>(null);
+  const [shareSlug,    setShareSlug]    = useState<string | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareError,   setShareError]   = useState<string | null>(null);
+  const [shareCopied,  setShareCopied]  = useState(false);
 
   // ── Existing image helpers (unchanged) ────────────────────────────────────
 
@@ -383,8 +384,29 @@ const Encrypt = () => {
         throw new Error(err.detail || "Failed to create share link");
       }
 
-      const data = await res.json();
-      setShareToken(data.share_token);
+      const data  = await res.json();
+      const token = data.share_token;
+
+      // Generate slug BEFORE showing any URL — so user only ever sees the clean URL
+      let slug: string | null = null;
+      try {
+        const slugRes = await fetch(`/share/og/register-slug`, {
+          method : "POST",
+          headers: { "Content-Type": "application/json" },
+          body   : JSON.stringify({
+            share_token: token,
+            asset_id   : encryptionResult.assetId,
+          }),
+        });
+        if (slugRes.ok) {
+          const sd = await slugRes.json();
+          slug = sd.slug ?? null;
+        }
+      } catch { /* slug is best-effort */ }
+
+      // Set both together — one render, correct URL shown immediately
+      setShareToken(token);
+      setShareSlug(slug);
     } catch (error) {
       setShareError(error instanceof Error ? error.message : "Failed to create share link");
     } finally {
@@ -411,6 +433,7 @@ const Encrypt = () => {
     setFileCategory(null);
     setEncryptionResult(null);
     setShareToken(null);
+    setShareSlug(null);
     setShareError(null);
     setShareCopied(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -565,17 +588,11 @@ const Encrypt = () => {
                     )}
 
                     {/* Hidden file inputs */}
+                    {/* Accept all file types — backend handles MIME validation */}
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept={[
-                        "image/jpeg","image/png","image/webp","image/tiff","image/bmp",
-                        ".jpg",".jpeg",".png",".webp",".tiff",".tif",".bmp",
-                        "application/pdf",".pdf",
-                        "application/msword",".doc",
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",".docx",
-                        "text/plain",".txt",
-                      ].join(",")}
+                      accept="*/*"
                       onChange={handleFileUpload}
                       className="hidden"
                     />
@@ -734,43 +751,56 @@ const Encrypt = () => {
                         )}
                       </div>
                     ) : (
-                      <div className="mb-6 bg-slate-800/60 border border-cyan-700/40 rounded-xl p-4">
-                        <p className="text-xs text-cyan-400 font-semibold mb-2 flex items-center gap-1">
-                          <Share2 className="w-3 h-3" /> Secure Share Link Created
-                        </p>
-                        <div className="flex items-center gap-2 bg-slate-950/60 rounded-lg px-3 py-2 mb-3">
-                          <code className="flex-1 text-xs text-cyan-300 truncate font-mono">
-                            {`${window.location.origin}/shared-view/${shareToken}`}
-                          </code>
-                          <button
-                            onClick={copyShareLink}
-                            className="shrink-0 p-1 hover:bg-slate-700 rounded transition-colors"
-                          >
-                            {shareCopied
-                              ? <CheckCircle className="w-4 h-4 text-green-400" />
-                              : <Copy className="w-4 h-4 text-slate-400" />}
-                          </button>
+                      <div className="mb-6 bg-slate-800/60 border border-cyan-700/40 rounded-xl p-4 space-y-3">
+
+                        {/* ── Share link — clean human-readable URL ── */}
+                        <div>
+                          <p className="text-xs text-cyan-400 font-semibold mb-2 flex items-center gap-1">
+                            <Share2 className="w-3 h-3" /> Share Link
+                          </p>
+
+                          {/* Primary: slug URL (e.g. /r/ashwitha-kavvam) */}
+                          <div className="flex items-center gap-2 bg-slate-950/60 rounded-lg px-3 py-2 mb-1">
+                            <code className="flex-1 text-xs text-cyan-300 truncate font-mono">
+                              {shareSlug
+                                ? `${window.location.origin}/r/${shareSlug}`
+                                : `${window.location.origin}/share/og/${shareToken}`}
+                            </code>
+                            <button
+                              onClick={() => {
+                                const url = shareSlug
+                                  ? `${window.location.origin}/r/${shareSlug}`
+                                  : `${window.location.origin}/share/og/${shareToken}`;
+                                navigator.clipboard.writeText(url).then(() => {
+                                  setShareCopied(true);
+                                  setTimeout(() => setShareCopied(false), 2500);
+                                });
+                              }}
+                              className="shrink-0 p-1 hover:bg-slate-700 rounded transition-colors"
+                            >
+                              {shareCopied
+                                ? <CheckCircle className="w-4 h-4 text-green-400" />
+                                : <Copy className="w-4 h-4 text-slate-400" />}
+                            </button>
+                          </div>
+                          <p className="text-xs text-slate-500">
+                            {shareSlug
+                              ? `Clean URL · also works as /share/og/${shareToken?.slice(0,8)}…`
+                              : "Shows branded card on WhatsApp · LinkedIn · Telegram"}
+                          </p>
                         </div>
-                        <div className="flex gap-2">
-                          <a
-                            href={`/shared-view/${shareToken}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex-1 bg-cyan-700/30 hover:bg-cyan-700/50 border border-cyan-700/40
-                                       text-cyan-300 text-xs font-medium py-2 rounded-lg transition-colors
-                                       flex items-center justify-center gap-1"
-                          >
-                            <ExternalLink className="w-3 h-3" /> Preview
-                          </a>
-                          <button
-                            onClick={() => navigate(`/resume/dashboard/${encryptionResult.assetId}`)}
-                            className="flex-1 bg-purple-700/30 hover:bg-purple-700/50 border border-purple-700/40
-                                       text-purple-300 text-xs font-medium py-2 rounded-lg transition-colors
-                                       flex items-center justify-center gap-1"
-                          >
-                            <BarChart2 className="w-3 h-3" /> Dashboard
-                          </button>
-                        </div>
+
+                        {/* ── Preview ── */}
+                        <a
+                          href={`/shared-view/${shareToken}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full bg-cyan-700/30 hover:bg-cyan-700/50 border border-cyan-700/40
+                                     text-cyan-300 text-xs font-medium py-2 rounded-lg transition-colors
+                                     flex items-center justify-center gap-1"
+                        >
+                          <ExternalLink className="w-3 h-3" /> Preview Shared View
+                        </a>
                       </div>
                     )}
 
