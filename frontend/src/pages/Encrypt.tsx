@@ -113,6 +113,7 @@ const Encrypt = () => {
 
   // ── Share link state ───────────────────────────────────────────────────────
   const [shareToken, setShareToken]         = useState<string | null>(null);
+  const [shareSlug,  setShareSlug]          = useState<string | null>(null);
   const [shareLoading, setShareLoading]     = useState(false);
   const [shareError, setShareError]         = useState<string | null>(null);
   const [shareCopied, setShareCopied]       = useState(false);
@@ -385,6 +386,8 @@ const Encrypt = () => {
 
       const data = await res.json();
       setShareToken(data.share_token);
+      // Slug is generated lazily when the OG link is first opened.
+      // /r/{name} will work automatically after the first share.
     } catch (error) {
       setShareError(error instanceof Error ? error.message : "Failed to create share link");
     } finally {
@@ -730,20 +733,20 @@ const Encrypt = () => {
                     ) : (
                       <div className="mb-6 bg-slate-800/60 border border-cyan-700/40 rounded-xl p-4 space-y-3">
 
-                        {/* ── Card share link (WhatsApp / LinkedIn / Telegram) ── */}
+                        {/* ── Share link (WhatsApp card preview) ── */}
                         <div>
-                          <p className="text-xs text-cyan-400 font-semibold mb-1 flex items-center gap-1">
+                          <p className="text-xs text-cyan-400 font-semibold mb-2 flex items-center gap-1">
                             <Share2 className="w-3 h-3" /> Share Link
-                            <span className="ml-1 text-slate-500 font-normal">— shows resume card on WhatsApp &amp; LinkedIn</span>
                           </p>
-                          <div className="flex items-center gap-2 bg-slate-950/60 rounded-lg px-3 py-2">
+                          <div className="flex items-center gap-2 bg-slate-950/60 rounded-lg px-3 py-2 mb-1">
                             <code className="flex-1 text-xs text-cyan-300 truncate font-mono">
                               {`${window.location.origin}/share/og/${shareToken}`}
                             </code>
                             <button
                               onClick={() => {
-                                const url = `${window.location.origin}/share/og/${shareToken}`;
-                                navigator.clipboard.writeText(url).then(() => {
+                                navigator.clipboard.writeText(
+                                  `${window.location.origin}/share/og/${shareToken}`
+                                ).then(() => {
                                   setShareCopied(true);
                                   setTimeout(() => setShareCopied(false), 2500);
                                 });
@@ -755,12 +758,12 @@ const Encrypt = () => {
                                 : <Copy className="w-4 h-4 text-slate-400" />}
                             </button>
                           </div>
-                          <p className="text-xs text-slate-600 mt-1">
-                            Clicking the link still opens the secure masked resume — tracking unchanged.
+                          <p className="text-xs text-slate-500">
+                            Shows branded card on WhatsApp · LinkedIn · Telegram
                           </p>
                         </div>
 
-                        {/* ── Direct preview ── */}
+                        {/* ── Preview ── */}
                         <a
                           href={`/shared-view/${shareToken}`}
                           target="_blank"
