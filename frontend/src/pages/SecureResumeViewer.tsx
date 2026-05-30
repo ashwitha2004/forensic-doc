@@ -196,7 +196,7 @@ function PdfViewer({ pdfBytes, isApproved }: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [numPages, setNumPages] = useState(0);
   const [pageNum, setPageNum]   = useState(1);
-  const [scale, setScale]       = useState(1.4);
+  const [scale, setScale]       = useState(2.0);
   const [pdfDoc, setPdfDoc]     = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const canvasRef               = useRef<HTMLCanvasElement>(null);
   const renderTaskRef           = useRef<pdfjsLib.RenderTask | null>(null);
@@ -210,7 +210,9 @@ function PdfViewer({ pdfBytes, isApproved }: PdfViewerProps) {
       const naturalVP   = page.getViewport({ scale: 1 });
       const containerW  = containerRef.current.clientWidth || window.innerWidth;
       // Leave 32px gutter (16px each side)
-      const fitted = Math.max(0.5, Math.min(3, (containerW - 32) / naturalVP.width));
+      const dpr    = window.devicePixelRatio || 1;
+      // Target 2.5× logical scale for crispness; cap at 3 to avoid memory issues
+      const fitted = Math.max(0.8, Math.min(3, ((containerW - 32) / naturalVP.width) * Math.min(dpr, 2.5)));
       setScale(parseFloat(fitted.toFixed(2)));
     } catch {
       // fall back to 1.4 if page read fails
@@ -250,13 +252,19 @@ function PdfViewer({ pdfBytes, isApproved }: PdfViewerProps) {
           renderTaskRef.current = null;
         }
 
-        const page     = await pdfDoc.getPage(pageNum);
-        const viewport = page.getViewport({ scale });
+        const page  = await pdfDoc.getPage(pageNum);
+        const dpr   = window.devicePixelRatio || 1;
+        // Render at physical pixels for crisp text on high-DPI screens
+        const viewport    = page.getViewport({ scale: scale * dpr });
+        const cssViewport = page.getViewport({ scale });
 
-        const canvas  = canvasRef.current!;
-        const ctx     = canvas.getContext("2d")!;
+        const canvas = canvasRef.current!;
+        const ctx    = canvas.getContext("2d")!;
         canvas.height = viewport.height;
         canvas.width  = viewport.width;
+        // Display at CSS size so layout is unchanged
+        canvas.style.width  = `${cssViewport.width}px`;
+        canvas.style.height = `${cssViewport.height}px`;
 
         // Step 1 — render clean PDF pixels
         const task = page.render({ canvasContext: ctx, viewport });
@@ -539,37 +547,26 @@ export default function SecureResumeViewer() {
         <aside className="w-full lg:w-80 bg-slate-900 border-t lg:border-t-0 lg:border-l
                           border-slate-800 flex flex-col lg:overflow-y-auto">
 
-          <div className="p-4 border-b border-slate-800 flex flex-col gap-2">
-            <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">
-              Security Info
-            </h2>
-            <InfoBadge icon={<CheckCircle className="w-3 h-3 text-green-400" />}
-                       text="Encrypted with AES-256-GCM" color="green" />
-            <InfoBadge icon={<CheckCircle className="w-3 h-3 text-green-400" />}
-                       text="Streamed through secure backend" color="green" />
-            <InfoBadge icon={<Eye className="w-3 h-3 text-cyan-400" />}
-                       text="This view is logged" color="cyan" />
-          </div>
-
-          {/* Sidebar contact masking — unchanged */}
+          {/* Sidebar contact section */}
           {maskedFindings.length > 0 && (
             <div className="p-4 border-b border-slate-800">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
                   Contact Info
                 </h2>
-                {isApproved ? (
+                {isApproved && (
                   <span className="text-xs text-green-400 flex items-center gap-1">
                     <CheckCircle className="w-3 h-3" /> Access granted
                   </span>
-                ) : (
-                  <button onClick={() => setShowMask(v => !v)}
-                          className="text-xs text-slate-500 hover:text-white flex items-center gap-1 transition-colors">
-                    {showMask ? <><EyeOff className="w-3 h-3" /> Masked</> : <><Eye className="w-3 h-3" /> Visible</>}
-                  </button>
+                )}
+                {!isApproved && (
+                  <span className="text-xs text-slate-500 flex items-center gap-1">
+                    <EyeOff className="w-3 h-3" /> Masked
+                  </span>
                 )}
               </div>
 
+              {/* Email */}
               {emailFindings.length > 0 && (
                 <div className="mb-2">
                   <p className="text-xs text-slate-500 mb-1 flex items-center gap-1">
@@ -581,12 +578,13 @@ export default function SecureResumeViewer() {
                       ))
                     : emailFindings.map((f, i) => (
                         <p key={i} className="text-sm font-mono text-cyan-300 bg-slate-800 px-2 py-1 rounded mb-1">
-                          {showMask ? f.masked : f.original}
+                          {f.masked}
                         </p>
                       ))}
                 </div>
               )}
 
+              {/* Phone */}
               {phoneFindings.length > 0 && (
                 <div>
                   <p className="text-xs text-slate-500 mb-1 flex items-center gap-1">
@@ -598,7 +596,7 @@ export default function SecureResumeViewer() {
                       ))
                     : phoneFindings.map((f, i) => (
                         <p key={i} className="text-sm font-mono text-cyan-300 bg-slate-800 px-2 py-1 rounded mb-1">
-                          {showMask ? f.masked : f.original}
+                          {f.masked}
                         </p>
                       ))}
                 </div>
