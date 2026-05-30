@@ -29,6 +29,12 @@ from pydantic import BaseModel
 from db.database import get_admin_db
 from routers.resume_share import _fetch_and_decrypt, _extract_text
 
+# ── In-memory slug maps (session-scoped fallback when DB column not yet added) ──
+# slug  → token  (for /r/{slug} lookup)
+# token → slug   (to return immediately after share creation)
+_slug_to_token: dict = {}
+_token_to_slug: dict = {}
+
 router = APIRouter()
 
 # ─── Name helpers ──────────────────────────────────────────────────────────────
@@ -147,6 +153,17 @@ def _name_to_slug(name: str) -> str:
     parts = clean.split()
     return "-".join(parts) if parts else "resume"
 
+def _unique_slug_mem(base_slug: str) -> str:
+    """Collision check against in-memory map only (no DB needed)."""
+    slug    = base_slug
+    counter = 2
+    for _ in range(20):
+        if slug not in _slug_to_token:
+            return slug
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+    return slug
+
 def _unique_slug(db, base_slug: str) -> str:
     """
     Return base_slug if available, otherwise ashwitha-kavvam-2, -3, etc.
@@ -171,10 +188,18 @@ def _unique_slug(db, base_slug: str) -> str:
         counter += 1
     return slug
 
-def _get_or_create_slug(db, token: str, asset_id: str) -> Optional[str]:
-    """Return existing slug or generate + store a new one. Returns None on error."""
+def _get_or_create_slug(db, token: str, asset_id: str) -> str:
+    """
+    Return existing slug or generate a new one.
+    Priority: in-memory cache → DB column → generate new.
+    Always returns a slug string (never None).
+    """
+    # 1. Fast path: already in memory
+    if token in _token_to_slug:
+        return _token_to_slug[token]
+
+    # 2. Try reading from DB (requires slug column to exist)
     try:
-        # Check if slug already stored
         res = (
             db.table("resume_share_links")
             .select("slug")
@@ -183,21 +208,32 @@ def _get_or_create_slug(db, token: str, asset_id: str) -> Optional[str]:
             .execute()
         )
         if res.data and res.data[0].get("slug"):
-            return res.data[0]["slug"]
+            slug = res.data[0]["slug"]
+            _token_to_slug[token] = slug
+            _slug_to_token[slug]  = token
+            return slug
+    except Exception:
+        pass
 
-        # Generate a new slug from the candidate name
-        name       = _get_candidate_name(db, asset_id)
-        base_slug  = _name_to_slug(name)
-        slug       = _unique_slug(db, base_slug)
+    # 3. Generate new slug from candidate name
+    name      = _get_candidate_name(db, asset_id)
+    base_slug = _name_to_slug(name)
+    slug      = _unique_slug_mem(base_slug)
 
-        # Store it
+    # 4. Store in memory (always works)
+    _token_to_slug[token] = slug
+    _slug_to_token[slug]  = token
+
+    # 5. Try persisting to DB (works after SQL migration is run)
+    try:
         db.table("resume_share_links") \
           .update({"slug": slug}) \
           .eq("share_token", token) \
           .execute()
-        return slug
     except Exception:
-        return None   # slug column may not exist — graceful fallback
+        pass  # column not yet added — in-memory fallback is enough
+
+    return slug
 
 # ─── OG card (PNG) ─────────────────────────────────────────────────────────────
 
@@ -317,14 +353,11 @@ class RegisterSlugRequest(BaseModel):
 async def register_slug(body: RegisterSlugRequest):
     """
     Called immediately after share link creation.
-    Generates (or returns existing) human-readable slug for the token.
+    Always returns a slug — uses in-memory cache if DB column not yet added.
     Returns: { slug, slug_url_path }
-    No changes to token, masking, approval, or any existing logic.
     """
     db   = get_admin_db()
     slug = _get_or_create_slug(db, body.share_token, body.asset_id)
-    if not slug:
-        return {"slug": None, "slug_url_path": None}
     return {"slug": slug, "slug_url_path": f"/r/{slug}"}
 
 
@@ -428,9 +461,15 @@ async def og_image(token: str) -> Response:
 async def slug_redirect(slug: str) -> RedirectResponse:
     """
     Human-readable URL → resolves to /share/og/{token}.
-    Example: /r/kavvam-ashwitha  →  /share/og/<token>
-    All existing security, tracking, masking untouched.
+    Checks in-memory cache first (works immediately, no DB column needed),
+    then falls back to DB lookup.
     """
+    # 1. Check in-memory cache first (always works)
+    if slug in _slug_to_token:
+        token = _slug_to_token[slug]
+        return RedirectResponse(url=f"/share/og/{token}", status_code=302)
+
+    # 2. Check DB (works after SQL migration)
     db = get_admin_db()
     try:
         res = (
@@ -442,6 +481,9 @@ async def slug_redirect(slug: str) -> RedirectResponse:
         )
         if res.data and res.data[0].get("is_active"):
             token = res.data[0]["share_token"]
+            # Warm the in-memory cache
+            _slug_to_token[slug]  = token
+            _token_to_slug[token] = slug
             return RedirectResponse(url=f"/share/og/{token}", status_code=302)
     except Exception:
         pass
