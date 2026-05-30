@@ -122,44 +122,6 @@ export default function ResumeDashboardPage() {
   const [generatingLink, setGeneratingLink] = useState(false);
   const [newLinkCopied, setNewLinkCopied] = useState(false);
 
-  const generateNewLink = useCallback(async () => {
-    if (!assetId || !userId) return;
-    setGeneratingLink(true);
-    setNewLinkUrl(null);
-    setNewLinkSlug(null);
-    try {
-      const res = await fetch(`${BACKEND_URL}/resume/share/create`, {
-        method : "POST",
-        headers: { "Content-Type": "application/json" },
-        body   : JSON.stringify({ asset_id: assetId, user_id: userId }),
-      });
-      if (!res.ok) return;
-      const data  = await res.json();
-      const token = data.share_token;
-      setNewLinkUrl(`/share/og/${token}`);
-
-      // Try to get a human-readable slug
-      try {
-        const slugRes = await fetch(`/share/og/register-slug`, {
-          method : "POST",
-          headers: { "Content-Type": "application/json" },
-          body   : JSON.stringify({ share_token: token, asset_id: assetId }),
-        });
-        if (slugRes.ok) {
-          const sd = await slugRes.json();
-          if (sd.slug) setNewLinkSlug(sd.slug);
-        }
-      } catch { /* slug is best-effort */ }
-
-      // Refresh activity to show new link
-      load();
-    } catch (e) {
-      console.error("[ResumeDashboard] generateNewLink error:", e);
-    } finally {
-      setGeneratingLink(false);
-    }
-  }, [assetId, userId, load]);
-
   const load = useCallback(async () => {
     if (!assetId || !userId) return;
     setLoading(true);
@@ -189,6 +151,42 @@ export default function ResumeDashboardPage() {
   }, [assetId, userId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // ── Generate a new share link for the same resume ─────────────────────────
+  const generateNewLink = useCallback(async () => {
+    if (!assetId || !userId) return;
+    setGeneratingLink(true);
+    setNewLinkUrl(null);
+    setNewLinkSlug(null);
+    try {
+      const res = await fetch(`${BACKEND_URL}/resume/share/create`, {
+        method : "POST",
+        headers: { "Content-Type": "application/json" },
+        body   : JSON.stringify({ asset_id: assetId, user_id: userId }),
+      });
+      if (!res.ok) return;
+      const data  = await res.json();
+      const token = data.share_token;
+      setNewLinkUrl(`/share/og/${token}`);
+      try {
+        const slugRes = await fetch(`/share/og/register-slug`, {
+          method : "POST",
+          headers: { "Content-Type": "application/json" },
+          body   : JSON.stringify({ share_token: token, asset_id: assetId }),
+        });
+        if (slugRes.ok) {
+          const sd = await slugRes.json();
+          if (sd.slug) setNewLinkSlug(sd.slug);
+        }
+      } catch { /* slug best-effort */ }
+      load();
+    } catch (e) {
+      console.error("[ResumeDashboard] generateNewLink:", e);
+    } finally {
+      setGeneratingLink(false);
+    }
+  }, [assetId, userId, load]);
+
 
   const handleRespond = useCallback(async (
     requestId: string,
