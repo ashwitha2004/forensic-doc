@@ -303,8 +303,9 @@ async def og_preview(token: str, request: "Request") -> HTMLResponse:
   <meta name="twitter:description" content="{description}" />
   <meta name="twitter:image"       content="{image_url}" />
 
-  <!-- Instant redirect for real browsers -->
-  <meta http-equiv="refresh" content="0;url={viewer_url}" />
+  <!-- Instant redirect for real browsers — use relative path so it always
+       works regardless of which host/port the page was served from -->
+  <meta http-equiv="refresh" content="0;url=/shared-view/{token}" />
   <style>
     body {{
       margin: 0;
@@ -320,8 +321,8 @@ async def og_preview(token: str, request: "Request") -> HTMLResponse:
   </style>
 </head>
 <body>
-  <p>Redirecting… <a href="{viewer_url}">Click here if not redirected</a></p>
-  <script>window.location.replace("{viewer_url}");</script>
+  <p>Redirecting… <a href="/shared-view/{token}">Click here if not redirected</a></p>
+  <script>window.location.replace("/shared-view/{token}");</script>
 </body>
 </html>"""
 

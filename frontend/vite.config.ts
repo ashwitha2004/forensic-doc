@@ -25,7 +25,20 @@ export default defineConfig(({ mode }) => ({
       '/inference' : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
       '/unified'   : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
       '/document'  : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
-      '/share/og'  : { target: 'http://127.0.0.1:8000', changeOrigin: true, secure: false },
+      '/share/og'  : {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        secure: false,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq: any, req: any) => {
+            // Preserve original host so backend builds the correct redirect URL
+            const originalHost = req.headers['host'] || 'localhost:8080';
+            proxyReq.setHeader('x-forwarded-host', originalHost);
+            proxyReq.setHeader('x-forwarded-proto',
+              (req.socket as any)?.encrypted ? 'https' : 'http');
+          });
+        },
+      },
     },
   },
   plugins: [
