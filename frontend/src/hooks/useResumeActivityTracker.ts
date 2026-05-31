@@ -327,12 +327,12 @@ export function useResumeActivityTracker(
 
     // ── Copy / Cut / SelectStart ──────────────────────────────────────────
     const onCopy = (): void => {
+      const selChars = window.getSelection()?.toString().length ?? 0;
       copyCount++;
-      push("copy_attempt", {
-        count         : copyCount,
-        selected_chars: window.getSelection()?.toString().length ?? 0,
-      });
+      push("copy_attempt", { count: copyCount, selected_chars: selChars });
       pushSecurityUpdate();
+      // If no text selected, check if clipboard has an image (Win+PrtScn)
+      if (selChars === 0) onClipboardChange();
     };
 
     const onCut = (): void => {
@@ -378,10 +378,13 @@ export function useResumeActivityTracker(
         return;
       }
 
-      // Screenshot signals
-      if (e.key === "PrintScreen") {
+      // Screenshot signals — catch all PrintScreen variants
+      if (e.key === "PrintScreen" || e.key === "Print" || e.key === "Snapshot") {
         screenshotSignals++;
-        push("screenshot_signal", { method: e.metaKey || e.ctrlKey ? "Win+PrtScn" : "PrintScreen" });
+        push("screenshot_signal", {
+          method: e.metaKey ? "Win+PrtScn" : e.altKey ? "Alt+PrtScn" : "PrintScreen",
+          label : "Possible Screenshot Attempt",
+        });
         pushSecurityUpdate();
         return;
       }
@@ -515,6 +518,24 @@ export function useResumeActivityTracker(
           keepalive: true,
         }).catch(() => {});
       }
+    };
+
+    // ── Clipboard image write = Win+PrtScn heuristic ─────────────────────────
+    // When Win+PrtScn fires, Windows writes an image to clipboard.
+    // The browser fires a 'copy' event with no selection text — detect that.
+    const onClipboardChange = async (): Promise<void> => {
+      try {
+        if (!navigator.clipboard?.read) return;
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          if (item.types.some(t => t.startsWith("image/"))) {
+            screenshotSignals++;
+            push("screenshot_signal", { method: "clipboard_image", label: "Possible Screenshot Attempt" });
+            pushSecurityUpdate();
+            break;
+          }
+        }
+      } catch { /* clipboard permission may be denied — ignore */ }
     };
 
     // ── getDisplayMedia interception (screen recording / screen share) ──────
