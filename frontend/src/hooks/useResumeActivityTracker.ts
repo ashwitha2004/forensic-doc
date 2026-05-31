@@ -328,21 +328,19 @@ export function useResumeActivityTracker(
 
     // ── Copy / Cut / SelectStart ──────────────────────────────────────────
     const onCopy = (): void => {
-      // De-duplicate: keydown (Ctrl+C) and the browser copy event both fire
       const now = Date.now();
+      // If Ctrl+C was already counted by onKeyDown (<50ms ago), skip
       if (now - lastCopyMs < 50) return;
       lastCopyMs = now;
 
       const selChars = window.getSelection()?.toString().length ?? 0;
-
       if (selChars === 0) {
-        // Nothing selected — could be Win+PrtScn writing image to clipboard.
-        // Do NOT count as copy attempt; check clipboard for screenshot image.
+        // No text selected AND not triggered by Ctrl+C keydown:
+        // This is a clipboard write from Win+PrtScn — check for image.
         onClipboardChange();
         return;
       }
-
-      // Actual text copy
+      // Real text copy outside the canvas (e.g. text inputs, sidebar)
       copyCount++;
       push("copy_attempt", { count: copyCount, selected_chars: selChars });
       pushSecurityUpdate();
@@ -371,8 +369,15 @@ export function useResumeActivityTracker(
     const onKeyDown = (e: KeyboardEvent): void => {
       const ctrl = e.ctrlKey || e.metaKey;
 
-      // Ctrl+C: let the browser fire the 'copy' event — onCopy handles it.
-      // Don't call onCopy() here to avoid double-count.
+      if (ctrl && e.key === "c") {
+        // PDF is canvas-based — getSelection() always returns "" on canvas.
+        // Count copy directly here from keyboard event.
+        lastCopyMs = Date.now(); // mark so the copy DOM event deduplicates
+        copyCount++;
+        push("copy_attempt", { count: copyCount, method: "Ctrl+C" });
+        pushSecurityUpdate();
+        return;
+      }
 
       if (ctrl && e.key === "p")  {
         e.preventDefault();
