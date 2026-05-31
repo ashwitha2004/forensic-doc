@@ -152,6 +152,23 @@ export default function ResumeDashboardPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Auto-refresh sessions every 10 s so security counters update live
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!assetId || !userId) return;
+      fetch(`${BACKEND_URL}/resume/activity/sessions/${assetId}?user_id=${encodeURIComponent(userId)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (!d) return;
+          const list = (d.sessions ?? []) as ViewerSession[];
+          list.sort((a, b) => new Date(b.first_seen).getTime() - new Date(a.first_seen).getTime());
+          setSessions(list);
+        })
+        .catch(() => {});
+    }, 10_000);
+    return () => clearInterval(t);
+  }, [assetId, userId]);
+
   // ── Generate a new share link for the same resume ─────────────────────────
   const generateNewLink = useCallback(async () => {
     if (!assetId || !userId) return;

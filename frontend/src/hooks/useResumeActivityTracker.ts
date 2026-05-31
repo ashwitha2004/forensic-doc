@@ -221,6 +221,7 @@ export function useResumeActivityTracker(
     let   isVisible  = !document.hidden;
     let   copyCount          = 0;
     let   cutCount           = 0;
+    let   lastCopyMs         = 0;   // prevent double-count (keydown + copy event)
     let   blurCount          = 0;
     let   printAttempts      = 0;
     let   screenshotSignals  = 0;
@@ -327,6 +328,11 @@ export function useResumeActivityTracker(
 
     // ── Copy / Cut / SelectStart ──────────────────────────────────────────
     const onCopy = (): void => {
+      // De-duplicate: keydown (Ctrl+C) and the browser copy event both fire
+      const now = Date.now();
+      if (now - lastCopyMs < 50) return;   // same copy, ignore duplicate
+      lastCopyMs = now;
+
       const selChars = window.getSelection()?.toString().length ?? 0;
       copyCount++;
       push("copy_attempt", { count: copyCount, selected_chars: selChars });
