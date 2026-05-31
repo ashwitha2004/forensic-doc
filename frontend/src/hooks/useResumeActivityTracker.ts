@@ -330,15 +330,22 @@ export function useResumeActivityTracker(
     const onCopy = (): void => {
       // De-duplicate: keydown (Ctrl+C) and the browser copy event both fire
       const now = Date.now();
-      if (now - lastCopyMs < 50) return;   // same copy, ignore duplicate
+      if (now - lastCopyMs < 50) return;
       lastCopyMs = now;
 
       const selChars = window.getSelection()?.toString().length ?? 0;
+
+      if (selChars === 0) {
+        // Nothing selected — could be Win+PrtScn writing image to clipboard.
+        // Do NOT count as copy attempt; check clipboard for screenshot image.
+        onClipboardChange();
+        return;
+      }
+
+      // Actual text copy
       copyCount++;
       push("copy_attempt", { count: copyCount, selected_chars: selChars });
       pushSecurityUpdate();
-      // If no text selected, check if clipboard has an image (Win+PrtScn)
-      if (selChars === 0) onClipboardChange();
     };
 
     const onCut = (): void => {
@@ -364,7 +371,8 @@ export function useResumeActivityTracker(
     const onKeyDown = (e: KeyboardEvent): void => {
       const ctrl = e.ctrlKey || e.metaKey;
 
-      if (ctrl && e.key === "c")  { onCopy();  return; }
+      // Ctrl+C: let the browser fire the 'copy' event — onCopy handles it.
+      // Don't call onCopy() here to avoid double-count.
 
       if (ctrl && e.key === "p")  {
         e.preventDefault();
